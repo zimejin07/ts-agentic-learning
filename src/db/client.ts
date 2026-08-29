@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
@@ -8,10 +8,10 @@ import * as schema from './schema.js';
 export type AppDatabase = BetterSQLite3Database<typeof schema>;
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const migrationPath = path.join(here, '../../drizzle/0000_init.sql');
+const drizzleDir = path.join(here, '../../drizzle');
 
 /**
- * Opens SQLite and applies the SQL migration if needed.
+ * Opens SQLite and applies every drizzle/*.sql file in order.
  * Pass ':memory:' for tests so nothing touches disk.
  */
 export function createDb(databasePath: string): {
@@ -22,8 +22,12 @@ export function createDb(databasePath: string): {
   if (databasePath !== ':memory:') {
     sqlite.pragma('journal_mode = WAL');
   }
-  const sql = readFileSync(migrationPath, 'utf8');
-  sqlite.exec(sql);
+  const files = readdirSync(drizzleDir)
+    .filter((name) => name.endsWith('.sql'))
+    .sort();
+  for (const file of files) {
+    sqlite.exec(readFileSync(path.join(drizzleDir, file), 'utf8'));
+  }
   const db = drizzle(sqlite, { schema });
   return { db, sqlite };
 }

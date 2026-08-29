@@ -4,7 +4,7 @@ import { createDb } from '../src/db/client.js';
 
 function app() {
   const { db } = createDb(':memory:');
-  return createApp(db);
+  return createApp({ db });
 }
 
 describe('health', () => {
