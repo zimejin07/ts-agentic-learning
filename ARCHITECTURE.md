@@ -32,6 +32,8 @@ The unit of state is the **message history** (`ChatMessage[]`). Each iteration:
 4. Each `tool_use` is executed; its output string becomes a `tool_result` block in a new user message.
 5. Repeat until a turn contains no `tool_use` blocks (that turn's text is the answer) or the iteration cap fires.
 
+Acting turns prefer `client.stream()` when the provider implements it (`messages.stream()` under the hood). Each `text_delta` is forwarded to `onToken` for live CLI rendering. Tokens are **not** stored in the trace. Planning still uses `complete()` so the JSON plan stays a single parseable blob. Clients that omit `stream()` (including the vitest FakeClient) keep working via `complete()`.
+
 A parallel **trace** (`TraceEvent[]`) records every phase for the console and the final result. It is derived state — the model never sees it.
 
 ## Design decisions and why
@@ -53,6 +55,16 @@ The plan is **advisory**, not enforced: it is injected into the first user messa
 ### Native `tool_use` instead of parsing free text
 
 Tools are declared to the API with JSON schemas, and the model returns structured `tool_use` blocks. This is far more reliable than asking the model to print `TOOL: calculator ARGS: {...}` and parsing it — the API constrains the output shape for us.
+
+### Streaming vs `complete()`
+
+The Anthropic client implements both. `complete()` is a single blocking `messages.create` — still used for the planner. `stream()` uses `messages.stream()` and a `StreamAssembler` that:
+
+- forwards `text_delta` immediately (live tokens)
+- buffers `input_json_delta` until `content_block_stop`, then emits one `tool_use`
+- emits `message_complete` on `message_stop` (same shape as `complete()`)
+
+**Backpressure:** the CLI pulls events with `for await`. If Ink is slow, the iterator pauses, which pauses reading the HTTP body. Ink itself buffers token deltas and flushes React state every ~50ms so we do not re-render on every token.
 
 ### The `LlmClient` seam
 
@@ -88,9 +100,8 @@ When the model requests several tools in one turn, we run them in order, sequent
 
 - **No persistent memory or vector store** — history lives in RAM for one run; nothing is remembered across runs.
 - **No retry/backoff or rate-limit handling** — a 429 or transient network error fails the run immediately.
-- **No streaming** — each LLM turn is a blocking call; tokens appear only when the turn completes.
-- **No cost/token tracking** — the API returns `usage` per call; we ignore it.
-- **No eval harness or regression tests for agent behavior** — unit tests cover tools, parsing, and loop mechanics with a fake LLM, but nothing measures end-to-end answer quality against real model outputs.
+- **No cost/token tracking** — the API returns `usage` per call; we ignore it. Streaming does not add a budget cap.
+- **No eval harness or regression tests for agent behavior** — unit tests cover tools, parsing, loop mechanics, and the stream mapper with a fake LLM, but nothing measures end-to-end answer quality against real model outputs.
 - **No guardrails or output validation** — the final answer is returned unchecked; there is no schema validation, content filtering, or factuality check.
 - **No concurrency or parallel tool execution** — tools run one at a time, in order.
 - **No observability/tracing** (e.g. OpenTelemetry) — the console trace is for humans; there are no spans, metrics, or structured logs.
@@ -102,7 +113,7 @@ When the model requests several tools in one turn, we run them in order, sequent
 ## If I were to productionize this
 
 - Add retry with exponential backoff and rate-limit-aware scheduling around API calls.
-- Stream responses (`messages.stream`) and surface tokens live in the CLI.
+- Stream responses (`messages.stream`) and surface tokens live in the CLI. **Done** (this branch): acting turns stream; planning is still a blocking `complete()` call.
 - Track token usage and cost per run; add a budget cap alongside the iteration cap.
 - Add a persistent memory layer (e.g. SQLite/Postgres + embeddings) with explicit read/write tools.
 - Introduce an eval harness: recorded scenarios, golden answers, and CI gates on agent behavior.

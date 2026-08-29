@@ -3,6 +3,8 @@ import type {
   ChatMessage,
   ContentBlock,
   LlmClient,
+  LlmRequest,
+  LlmResponse,
   ToolDefinition,
   TraceEvent,
   TraceEventType,
@@ -19,6 +21,13 @@ export interface RunAgentOptions {
   maxIterations: number;
   /** Optional callback so the CLI can stream events to the console live. */
   onEvent?: (event: TraceEvent) => void;
+  /**
+   * Live token callback. Fired for each text_delta when the client supports
+   * streaming. Tokens are NOT stored in the trace (that would explode the log).
+   */
+  onToken?: (text: string) => void;
+  /** Ctrl+C / cancel. Checked between iterations and forwarded to the LLM. */
+  abortSignal?: AbortSignal;
 }
 
 /**
@@ -31,7 +40,7 @@ export interface RunAgentOptions {
  *     end so callers can inspect or print the full run.
  */
 export async function runAgent(options: RunAgentOptions): Promise<AgentResult> {
-  const { goal, client, tools, maxIterations, onEvent } = options;
+  const { goal, client, tools, maxIterations, onEvent, onToken, abortSignal } = options;
   const trace: TraceEvent[] = [];
   const emit = (type: TraceEventType, iteration: number, message: string) => {
     const event: TraceEvent = { type, iteration, message };
@@ -39,8 +48,12 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentResult> {
     onEvent?.(event);
   };
 
+  throwIfAborted(abortSignal);
+
   // ---------- PLAN ----------
-  const { plan, usedFallback } = await createPlan(goal, client);
+  // Planning stays on complete(): we want a parseable JSON blob, not a live
+  // token show. Streaming is reserved for the acting loop below.
+  const { plan, usedFallback } = await createPlan(goal, client, abortSignal);
   if (usedFallback) {
     emit('warning', 0, 'Could not parse the model plan; falling back to a single-step plan.');
   }
@@ -59,14 +72,20 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentResult> {
 
   // ---------- ACT / OBSERVE / REFLECT loop ----------
   while (iterations < maxIterations) {
+    throwIfAborted(abortSignal);
     iterations++;
 
-    const response = await client.complete({
-      system: AGENT_SYSTEM_PROMPT,
-      messages,
-      tools,
-      maxTokens: 1024,
-    });
+    const response = await completeTurn(
+      client,
+      {
+        system: AGENT_SYSTEM_PROMPT,
+        messages,
+        tools,
+        maxTokens: 1024,
+        abortSignal,
+      },
+      onToken,
+    );
 
     const textBlocks = response.content.filter(isTextBlock);
     const toolUses = response.content.filter(isToolUseBlock);
@@ -115,6 +134,36 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentResult> {
     : `Stopped after reaching the max iteration cap (${maxIterations}) without a final answer.`;
   emit('answer', iterations, answer);
   return { answer, plan, trace, iterations, hitMaxIterations: true };
+}
+
+/**
+ * Prefer `client.stream` when the provider implements it, otherwise `complete()`.
+ * Tests that only implement complete() keep working unchanged.
+ */
+async function completeTurn(
+  client: LlmClient,
+  request: LlmRequest,
+  onToken: ((text: string) => void) | undefined,
+): Promise<LlmResponse> {
+  if (!client.stream) {
+    return client.complete(request);
+  }
+
+  let final: LlmResponse | null = null;
+  for await (const event of client.stream(request)) {
+    if (event.type === 'text_delta') onToken?.(event.text);
+    if (event.type === 'message_complete') final = event.response;
+  }
+  if (!final) {
+    throw new Error('Stream ended without a complete message');
+  }
+  return final;
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw new Error('Aborted');
+  }
 }
 
 function isTextBlock(block: ContentBlock): block is Extract<ContentBlock, { type: 'text' }> {

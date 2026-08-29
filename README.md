@@ -43,10 +43,16 @@ Optional environment variables (see `.env.example`):
 ## Run it
 
 ```bash
+# Live Ink UI — tokens stream in as they arrive (requires a TTY)
 pnpm start "What time is it, and what is 24 * 7?"
+
+# Plain console logger (pipes, CI, or if you prefer the original output)
+pnpm start:plain "What time is it, and what is 24 * 7?"
 ```
 
-Example output (abridged):
+`pnpm start` falls back to the plain logger automatically when stdout is not a TTY. Press **Ctrl+C** to abort an in-flight request.
+
+Example plain output (abridged):
 
 ```
 [plan]
@@ -102,12 +108,18 @@ The conversation history **is** the agent's memory — there is no other state s
 
 ```
 src/
-  index.ts               CLI entry point
+  index.tsx              CLI entry (Ink UI on a TTY)
+  cli/
+    App.tsx              Ink layout: live tokens, plan, rolling trace
+    plain.ts             plain logger runner
+    plain-entry.ts       `pnpm start:plain`
+    bootstrap.ts         shared argv / env / abort wiring
   agent/
     loop.ts              the plan-act-observe-reflect loop
     planner.ts           planning call + fallback
     prompts.ts           system prompts
     anthropic-client.ts  the only file that imports the Anthropic SDK
+    stream-mapper.ts     SSE events -> StreamEvent (unit-tested, no network)
   tools/
     index.ts             registry + safe executeTool()
     calculator.ts

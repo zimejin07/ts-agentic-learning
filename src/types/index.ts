@@ -78,6 +78,8 @@ export interface LlmRequest {
   messages: ChatMessage[];
   tools?: Array<Pick<ToolDefinition, 'name' | 'description' | 'inputSchema'>>;
   maxTokens?: number;
+  /** Optional cancel signal (Ctrl+C). Providers should abort in-flight HTTP. */
+  abortSignal?: AbortSignal;
 }
 
 export interface LlmResponse {
@@ -87,9 +89,23 @@ export interface LlmResponse {
 }
 
 /**
+ * Incremental events from a streaming LLM turn.
+ * Tokens are forwarded live; tool_use is emitted only once the block is complete
+ * (JSON assembled). message_complete carries the same payload as `complete()`.
+ */
+export type StreamEvent =
+  | { type: 'text_delta'; text: string }
+  | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
+  | { type: 'message_complete'; response: LlmResponse };
+
+/**
  * The seam between the agent and any LLM provider. The agent loop only knows
  * this interface, so tests can substitute a fake client with scripted replies.
+ *
+ * `stream` is optional: clients that omit it still work (the loop falls back
+ * to `complete()`). That is why the existing vitest FakeClient needs no changes.
  */
 export interface LlmClient {
   complete(request: LlmRequest): Promise<LlmResponse>;
+  stream?(request: LlmRequest): AsyncIterable<StreamEvent>;
 }
