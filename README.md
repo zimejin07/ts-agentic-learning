@@ -118,7 +118,8 @@ src/
     env.ts               env loading (API key, model, max iterations)
     logger.ts            colored per-phase console output
     parse-plan.ts        lenient JSON plan parser
-tests/                   vitest: tools, plan parsing, and the loop (fake LLM)
+tests/                   vitest: tools, plan parsing, the loop, and eval graders
+eval/                    scenario runner for agent-behavior regression (fake LLM)
 ```
 
 ## How to add a new tool
@@ -154,10 +155,33 @@ That's it — the loop, the prompts, and the Anthropic tool schema pick it up au
 
 ```bash
 pnpm test        # vitest (no API key needed — the loop is tested with a fake LLM)
+pnpm eval        # scenario runner against a fake LLM (also no API key)
 pnpm lint        # eslint
 pnpm typecheck   # tsc --noEmit
 pnpm format      # prettier
 ```
+
+GitHub Actions runs `pnpm test` and `pnpm eval` on every push/PR. There is no API key in CI.
+
+## Eval harness
+
+`eval/` is a tiny regression suite for _agent behavior_, not answer quality:
+
+| Piece                   | Role                                                                 |
+| ----------------------- | -------------------------------------------------------------------- |
+| `eval/scenarios/*.json` | goal + scripted LLM replies + graders                                |
+| `eval/fake-client.ts`   | pops canned `LlmResponse`s (same idea as unit tests)                 |
+| `eval/graders.ts`       | `answerContains`, `toolsCalled`, `hitMaxIterations`, `planStepCount` |
+| `eval/runner.ts`        | loads scenarios, runs `runAgent`, exits 1 on any failure             |
+
+This is **not** an LLM-as-judge. Live-model eval (`EVAL_LIVE=1`) is intentionally unsupported — it would be non-deterministic and does not belong in CI.
+
+### How to add a scenario
+
+1. Copy `eval/scenarios/calculator-24-7.json`.
+2. Fill in `scriptedResponses` in the same order the agent will call the LLM (plan, then acting turns).
+3. Set `expect` checks. Keep them mechanical (substrings, tool names, flags).
+4. Run `pnpm eval`.
 
 ## Assumptions
 

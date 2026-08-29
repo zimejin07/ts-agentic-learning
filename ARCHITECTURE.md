@@ -70,6 +70,10 @@ There is exactly one memory: the in-memory conversation history, which grows by 
 
 When the model requests several tools in one turn, we run them in order, sequentially. Parallel execution would be faster but complicates the trace, error attribution, and the beginner-facing narrative. It is listed in the roadmap.
 
+### Eval harness (this branch)
+
+`eval/` runs the same `runAgent` loop as production, but injects a `FakeClient` whose replies are checked into `eval/scenarios/*.json`. Graders are mechanical (`answerContains`, `toolsCalled`, `hitMaxIterations`, `planStepCount`) so CI does not need an API key and cannot flake on model drift. That is the point: lock the _control flow_ of the agent, not the poetry of the final sentence.
+
 ## Failure modes considered
 
 | Failure mode                                                  | How it is handled                                                                                                                                                                |
@@ -90,7 +94,7 @@ When the model requests several tools in one turn, we run them in order, sequent
 - **No retry/backoff or rate-limit handling** — a 429 or transient network error fails the run immediately.
 - **No streaming** — each LLM turn is a blocking call; tokens appear only when the turn completes.
 - **No cost/token tracking** — the API returns `usage` per call; we ignore it.
-- **No eval harness or regression tests for agent behavior** — unit tests cover tools, parsing, and loop mechanics with a fake LLM, but nothing measures end-to-end answer quality against real model outputs.
+- **No eval harness against real models** — `eval/` + GitHub Actions now regress _scripted_ agent behavior (fake LLM, substring/tool/flag checks). There is still no live-model eval, no LLM-as-judge, and no golden-file comparison of free-form prose quality.
 - **No guardrails or output validation** — the final answer is returned unchecked; there is no schema validation, content filtering, or factuality check.
 - **No concurrency or parallel tool execution** — tools run one at a time, in order.
 - **No observability/tracing** (e.g. OpenTelemetry) — the console trace is for humans; there are no spans, metrics, or structured logs.
@@ -105,7 +109,7 @@ When the model requests several tools in one turn, we run them in order, sequent
 - Stream responses (`messages.stream`) and surface tokens live in the CLI.
 - Track token usage and cost per run; add a budget cap alongside the iteration cap.
 - Add a persistent memory layer (e.g. SQLite/Postgres + embeddings) with explicit read/write tools.
-- Introduce an eval harness: recorded scenarios, golden answers, and CI gates on agent behavior.
+- Introduce an eval harness: recorded scenarios, golden answers, and CI gates on agent behavior. **Done** for scripted FakeClient scenarios (`pnpm eval` + `.github/workflows/eval.yml`). Still missing: live-model eval and LLM-as-judge scoring.
 - Validate tool inputs with Zod schemas generated from the tool definitions; validate final answers against an output contract.
 - Run independent tool calls in parallel (`Promise.all`) with per-tool timeouts.
 - Instrument with OpenTelemetry: one span per LLM call and per tool execution.

@@ -11,6 +11,7 @@
     "start": "tsx src/index.ts",
     "build": "tsc",
     "test": "vitest run",
+    "eval": "tsx eval/runner.ts",
     "lint": "eslint .",
     "format": "prettier --write .",
     "typecheck": "tsc --noEmit"

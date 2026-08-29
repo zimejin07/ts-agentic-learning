@@ -1,0 +1,20 @@
+{
+  "id": "plan-fallback",
+  "goal": "Do the thing",
+  "maxIterations": 8,
+  "scriptedResponses": [
+    {
+      "stopReason": "end_turn",
+      "content": [{ "type": "text", "text": "I refuse to output JSON." }]
+    },
+    {
+      "stopReason": "end_turn",
+      "content": [{ "type": "text", "text": "Done anyway." }]
+    }
+  ],
+  "expect": {
+    "answerContains": ["Done anyway"],
+    "hitMaxIterations": false,
+    "planStepCount": 1
+  }
+}
