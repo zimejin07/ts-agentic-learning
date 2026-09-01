@@ -16,7 +16,13 @@ flowchart TD
   llm --> decide{Response contains tool_use}
   decide -->|no| answer[Final answer plus trace]
   decide -->|yes| act[Registry executeTool never throws]
-  act --> observe[tool_result appended to history]
+  act --> pre{Zod plus preflight ok}
+  pre -->|no| observe[tool_result appended to history]
+  pre -->|yes and requiresApproval| hitl{Human y/n}
+  hitl -->|decline| observe
+  hitl -->|approve| run[execute]
+  pre -->|yes and read-only| run
+  run --> observe
   observe --> reflect[Model text logged as reflection]
   reflect --> loop
   loop -->|cap reached| answer
@@ -79,6 +85,11 @@ The prompt can _ask_ the model not to repeat itself. The loop now _enforces_ a f
 - **Stuck-loop** — same tool name + same args is not executed again; the model gets an error observation instead.
 - **History trim** — keep the goal message plus the last N assistant/user pairs so we never split `tool_use` from `tool_result`.
 - **Zod at the registry** — invalid tool args never reach `execute`.
+- **HITL** — `requiresApproval` tools pause after Zod/preflight. Decline is an error observation; the stuck-call fingerprint then blocks retrying the same args.
+
+### A mock airline desk (search → quote → book)
+
+The calculator/time/search tools are one-shot Q&A. The airline tools are a **workflow**: the model must carry a `fare_id` through history, quote before booking, and wait for a human on the only write. Catalog, quotes, and PNRs live in process memory (`resetAirlineStore` in tests). There is no payment, GDS, or email — the lesson is the gate, not aviation.
 
 ### Tools never throw
 
@@ -86,7 +97,7 @@ The prompt can _ask_ the model not to repeat itself. The loop now _enforces_ a f
 
 ### State and memory per iteration
 
-There is exactly one memory: the in-memory conversation history, which grows by one assistant turn and one tool-result turn per iteration. Nothing persists between runs. This is the simplest correct choice for a CLI demo and keeps the mental model clean: _what the model sees is all there is_.
+There is exactly one memory **the model sees**: the in-memory conversation history, which grows by one assistant turn and one tool-result turn per iteration. The airline module also keeps a process-local quote/PNR table so `book_flight` can be stateful; the model only learns about it through observations. Nothing persists between process runs.
 
 ### Sequential tool execution
 
@@ -100,6 +111,8 @@ When the model requests several tools in one turn, we run them in order, sequent
 | **Malformed plan** (model ignores the JSON instruction)       | `parsePlan` tries fenced blocks, raw JSON, then the first `{...}` in the text. If all fail: single-step fallback plan + a `[warn]` trace event. The run degrades, never crashes. |
 | **Hallucinated tool** (model calls a tool that doesn't exist) | The registry returns `Error: unknown tool "X". Available tools: ...` as an observation, so the model can self-correct on the next turn.                                          |
 | **Malformed tool arguments**                                  | Zod `argsSchema` in the registry returns `Error: invalid arguments...` before `execute`. Tools may still validate domain rules (e.g. division by zero).                          |
+| **Unknown / unquoted fare**                                   | `preflight` returns an error **before** the HITL prompt, so the human is never asked to approve garbage.                                                                         |
+| **Side-effecting tool (book_flight)**                         | Registry asks `onApprove`. CLI: `y/n` or `--yes`. Tests inject a callback. Missing approver = deny. Decline is an observation; identical retries are fingerprinted.              |
 | **HTTP 429 / 5xx from the LLM**                               | `withRetry` retries a few times with backoff. 400 is not retried.                                                                                                                |
 | **Repeated identical tool calls**                             | Fingerprint of name+args; the second call is blocked and observed as an error.                                                                                                   |
 | **Unbounded history**                                         | Oldest complete turns are dropped (`AGENT_KEEP_LAST_TURNS`).                                                                                                                     |
@@ -112,15 +125,15 @@ When the model requests several tools in one turn, we run them in order, sequent
 
 ## What's missing / not production-ready
 
-- **No persistent memory or vector store** — history lives in RAM for one run; trim only keeps a window, it does not persist across runs.
+- **No persistent memory or vector store** — history lives in RAM for one run; trim only keeps a window, it does not persist across runs. Airline quotes/PNRs reset when the process exits.
 - **Retry is only for LLM HTTP 429/5xx** — no retry of tool execution, no rate-limit scheduler beyond backoff.
-- **No eval harness or regression tests for agent behavior** — unit tests cover tools, parsing, loop mechanics, and the stream mapper with a fake LLM, but nothing measures end-to-end answer quality against real model outputs.
+- **No eval harness or regression tests for agent behavior** — unit tests cover tools, parsing, loop mechanics, HITL approve/deny, and the stream mapper with a fake LLM, but nothing measures end-to-end answer quality against real model outputs.
 - **No guardrails or output validation** — the final answer is returned unchecked; there is no schema validation, content filtering, or factuality check.
 - **No concurrency or parallel tool execution** — tools run one at a time, in order.
 - **No observability/tracing** (e.g. OpenTelemetry) — the console trace is for humans; there are no spans, metrics, or structured logs.
-- **No sandboxing for tool execution** — tools run in-process with full Node.js privileges. Safe today only because all three tools are pure functions; a `bash` or `fs` tool would be dangerous.
+- **No sandboxing for tool execution** — tools run in-process with full Node.js privileges. Safe today only because tools are in-memory mocks; a `bash` or `fs` tool would be dangerous.
 - **Single-agent only** — no multi-agent patterns, orchestration, or delegation.
-- **No human-in-the-loop approval** — the agent acts without asking permission for anything.
+- **HITL is CLI y/n (or `--yes`)** — no durable approval queue, no timeout, no per-tool policy beyond `requiresApproval`.
 - **Weak error recovery for unexpected LLM output** — unknown content block types are collapsed to empty text; a truly malformed API response would surface as a confusing answer rather than a structured error.
 
 ## If I were to productionize this
@@ -131,5 +144,5 @@ When the model requests several tools in one turn, we run them in order, sequent
 - Run independent tool calls in parallel (`Promise.all`) with per-tool timeouts.
 - Instrument with OpenTelemetry: one span per LLM call and per tool execution.
 - Sandbox tool execution (subprocess, container, or WASM) before adding any tool that touches the filesystem, network, or shell.
-- Add a human-in-the-loop approval step for tools marked as side-effecting.
+- Add a human-in-the-loop approval step for tools marked as side-effecting. **Done** for `book_flight` (CLI y/n / `--yes` / injected `onApprove`).
 - Support multi-agent orchestration (planner/executor/critic roles) once single-agent behavior is well-tested.

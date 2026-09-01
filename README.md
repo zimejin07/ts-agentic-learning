@@ -18,11 +18,14 @@ plan -> act -> observe -> reflect -> (loop) -> answer
 
 ### Built-in tools
 
-| Tool           | What it does                                                          |
-| -------------- | --------------------------------------------------------------------- |
-| `calculator`   | Safe arithmetic (`+ - * /`, parentheses, decimals). No `eval`.        |
-| `current_time` | Current date/time, optionally in an IANA timezone.                    |
-| `web_search`   | A **mock** search backed by a tiny built-in index (not the real web). |
+| Tool             | HITL?   | What it does                                                          |
+| ---------------- | ------- | --------------------------------------------------------------------- |
+| `calculator`     | no      | Safe arithmetic (`+ - * /`, parentheses, decimals). No `eval`.        |
+| `current_time`   | no      | Current date/time, optionally in an IANA timezone.                    |
+| `web_search`     | no      | A **mock** search backed by a tiny built-in index (not the real web). |
+| `search_flights` | no      | Mock airline search. Returns `fare_id` lines (no network).            |
+| `get_fare`       | no      | Locks a quote for a `fare_id`. Required before booking.               |
+| `book_flight`    | **yes** | Issues a mock PNR. Pauses for `y/n` (or `--yes`) before execute.      |
 
 ## Setup
 
@@ -51,9 +54,15 @@ pnpm start "What time is it, and what is 24 * 7?"
 
 # Plain console logger (pipes, CI, or if you prefer the original output)
 pnpm start:plain "What time is it, and what is 24 * 7?"
+
+# Mock airline workflow: search → quote → human approval → PNR
+pnpm start "Find a morning flight from SFO to JFK on 2026-09-15 under $400 and book it for Ada Lovelace."
+
+# Skip the y/n prompt (demos / scripts)
+pnpm start --yes "Book the cheapest SFO to JFK on 2026-09-15 for Ada Lovelace."
 ```
 
-`pnpm start` falls back to the plain logger automatically when stdout is not a TTY. Press **Ctrl+C** to abort an in-flight request.
+`pnpm start` falls back to the plain logger automatically when stdout is not a TTY. Press **Ctrl+C** to abort an in-flight request. Piped stdin without `--yes` **declines** `book_flight` (safe default).
 
 Example plain output (abridged):
 
@@ -104,6 +113,7 @@ Example plain output (abridged):
 - **Observe** — the tool's output (or error string) is appended to the conversation as a `tool_result`.
 - **Reflect** — any text the model writes alongside tool calls is logged as its reasoning.
 - **Loop** — repeats until the model answers without calling tools, or `AGENT_MAX_ITERATIONS` is reached.
+- **HITL** — tools marked `requiresApproval` (today: `book_flight`) pause after Zod/preflight. The human's yes/no comes back as a normal observation, not a special control plane. Invalid args never prompt.
 
 The conversation history **is** the agent's memory — there is no other state store. See [ARCHITECTURE.md](ARCHITECTURE.md) for the design decisions and failure-mode analysis.
 
@@ -113,10 +123,11 @@ The conversation history **is** the agent's memory — there is no other state s
 src/
   index.tsx              CLI entry (Ink UI on a TTY)
   cli/
-    App.tsx              Ink layout: live tokens, plan, rolling trace
+    App.tsx              Ink layout: live tokens, plan, rolling trace, y/n gate
     plain.ts             plain logger runner
     plain-entry.ts       `pnpm start:plain`
     bootstrap.ts         shared argv / env / abort wiring
+    approve.ts           `--yes` parsing and stdin y/n
   agent/
     loop.ts              the plan-act-observe-reflect loop
     loop-guards.ts       retry, token budget helpers, stuck-call fingerprint, history trim
@@ -129,6 +140,7 @@ src/
     calculator.ts
     current-time.ts
     web-search.ts        (mock)
+    airline.ts           mock search / quote / book (HITL on book)
   types/index.ts         shared, SDK-free types (incl. the LlmClient seam)
   utils/
     env.ts               env loading (API key, model, max iterations)
@@ -164,7 +176,7 @@ export const myTool: ToolDefinition = {
 
 2. Register it in `src/tools/index.ts` by adding it to the `tools` array.
 
-That's it — the loop, the prompts, and the Anthropic tool schema pick it up automatically. Rules of thumb: never throw from `execute` (return `Error: ...` strings), and never use `eval`.
+That's it — the loop, the prompts, and the Anthropic tool schema pick it up automatically. Rules of thumb: never throw from `execute` (return `Error: ...` strings), and never use `eval`. For a side-effecting tool, set `requiresApproval: true` and optionally `preflight` (domain errors skip the prompt) plus `approvalSummary`.
 
 ## Tests and checks
 
@@ -177,6 +189,7 @@ pnpm format      # prettier
 
 ## Assumptions
 
-- `web_search` is intentionally fake: deterministic, free, and safe for tests. Swapping in a real search API only means rewriting its `execute`.
+- `web_search` and the airline catalog are intentionally fake: deterministic, free, and safe for tests. No real tickets, payments, or web search.
+- `book_flight` is the only irreversible step. Search and quote are free; the human is the payment rail.
 - The plan is **advisory**: the acting loop sees it but may skip or reorder steps.
 - This is a learning demo, not production software — see the "not production-ready" section of [ARCHITECTURE.md](ARCHITECTURE.md).

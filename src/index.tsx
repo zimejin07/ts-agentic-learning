@@ -22,7 +22,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const { model, maxIterations, client } = loadCliConfig();
+  const { model, maxIterations, client, autoApprove } = loadCliConfig();
   const abort = attachAbort();
 
   const instance = render(
@@ -32,6 +32,7 @@ async function main(): Promise<void> {
       maxIterations={maxIterations}
       client={client}
       abortSignal={abort.signal}
+      autoApprove={autoApprove}
     />,
   );
 

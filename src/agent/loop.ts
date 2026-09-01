@@ -1,5 +1,6 @@
 import type {
   AgentResult,
+  ApprovalRequest,
   ChatMessage,
   ContentBlock,
   LlmClient,
@@ -42,6 +43,11 @@ export interface RunAgentOptions {
   /** Extra LLM attempts after a 429/5xx. 0 = try once. */
   retryAttempts?: number;
   retryDelayMs?: number;
+  /**
+   * Human-in-the-loop for tools with `requiresApproval`. Missing means deny
+   * (safe default). Tests inject a scripted callback; the CLI asks y/n.
+   */
+  onApprove?: (request: ApprovalRequest) => Promise<boolean>;
 }
 
 /**
@@ -54,7 +60,7 @@ export interface RunAgentOptions {
  *   - trim old turns so history cannot grow forever
  */
 export async function runAgent(options: RunAgentOptions): Promise<AgentResult> {
-  const { goal, client, tools, maxIterations, onEvent, onToken, abortSignal } = options;
+  const { goal, client, tools, maxIterations, onEvent, onToken, abortSignal, onApprove } = options;
   const tokenBudget = options.tokenBudget ?? getTokenBudget();
   const keepLastTurns = options.keepLastTurns ?? getKeepLastTurns();
   const retryAttempts = options.retryAttempts ?? getRetryAttempts();
@@ -198,7 +204,24 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentResult> {
         emit('warning', iterations, `Blocked repeat call to ${toolUse.name}.`);
       } else {
         seenCalls.add(fp);
-        output = await executeTool(toolUse.name, toolUse.input);
+        output = await executeTool(toolUse.name, toolUse.input, {
+          onApprove: async (request) => {
+            emit('approve', iterations, request.summary);
+            if (!onApprove) {
+              emit(
+                'warning',
+                iterations,
+                `No human approver configured; declined ${request.toolName}.`,
+              );
+              return false;
+            }
+            const approved = await onApprove(request);
+            if (!approved) {
+              emit('warning', iterations, `User declined ${request.toolName}.`);
+            }
+            return approved;
+          },
+        });
       }
       emit('observe', iterations, truncate(output, 500));
       toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: output });
