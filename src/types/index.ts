@@ -34,6 +34,8 @@ export interface AgentResult {
   trace: TraceEvent[];
   iterations: number;
   hitMaxIterations: boolean;
+  hitTokenBudget: boolean;
+  tokensUsed: number;
 }
 
 /**
@@ -48,14 +50,26 @@ export interface ToolInputSchema {
 }
 
 /**
- * A tool the agent can call. `execute` receives the raw model-provided input,
- * so every tool is responsible for validating its own arguments and returning
- * errors as strings instead of throwing.
+ * Structural Zod-like parse result. Types stay SDK-free; tools pass a real
+ * Zod schema that matches this shape.
+ */
+export interface ArgsSchema {
+  safeParse(
+    input: unknown,
+  ):
+    | { success: true; data: Record<string, unknown> }
+    | { success: false; error: { issues: Array<{ message: string }> } };
+}
+
+/**
+ * A tool the agent can call. `execute` receives args already checked against
+ * `argsSchema` when one is set (the registry runs that parse first).
  */
 export interface ToolDefinition {
   name: string;
   description: string;
   inputSchema: ToolInputSchema;
+  argsSchema?: ArgsSchema;
   execute: (input: Record<string, unknown>) => Promise<string> | string;
 }
 
@@ -86,6 +100,8 @@ export interface LlmResponse {
   /** Mirrors Anthropic stop reasons: 'end_turn', 'tool_use', 'max_tokens', ... */
   stopReason: string;
   content: ContentBlock[];
+  /** Present when the provider reports token usage (Anthropic does). */
+  usage?: { inputTokens: number; outputTokens: number };
 }
 
 /**

@@ -70,6 +70,16 @@ The Anthropic client implements both. `complete()` is a single blocking `message
 
 `src/agent/anthropic-client.ts` is the only file that imports the SDK. The loop depends on a small `LlmClient` interface with SDK-free types (`src/types`). Payoff: the entire loop is tested with a scripted `FakeClient` — no network, no key, deterministic — and swapping providers means writing one adapter.
 
+### Loop engineering
+
+The prompt can _ask_ the model not to repeat itself. The loop now _enforces_ a few cheap invariants (see `src/agent/loop-guards.ts`):
+
+- **Retry** 429 / 5xx with exponential backoff. Never retry 400 — that is our bug.
+- **Token budget** (`AGENT_TOKEN_BUDGET`) sits next to the iteration cap. Usage comes from the provider when present.
+- **Stuck-loop** — same tool name + same args is not executed again; the model gets an error observation instead.
+- **History trim** — keep the goal message plus the last N assistant/user pairs so we never split `tool_use` from `tool_result`.
+- **Zod at the registry** — invalid tool args never reach `execute`.
+
 ### Tools never throw
 
 `executeTool` converts every failure — unknown tool name, bad arguments, crash inside the tool — into an `Error: ...` string that goes back to the model as a normal observation. The philosophy: **the model is the error-recovery mechanism**. A thrown exception kills the run; an error observation lets the agent adapt. This is also why the calculator is a hand-written parser instead of `eval`: tool input is model-generated and must be treated as untrusted.
@@ -89,7 +99,11 @@ When the model requests several tools in one turn, we run them in order, sequent
 | **Infinite loop** (model keeps calling tools forever)         | Hard `AGENT_MAX_ITERATIONS` cap (default 8). On hitting it, the agent returns the best answer-so-far with a warning, and the CLI exits with code 2.                              |
 | **Malformed plan** (model ignores the JSON instruction)       | `parsePlan` tries fenced blocks, raw JSON, then the first `{...}` in the text. If all fail: single-step fallback plan + a `[warn]` trace event. The run degrades, never crashes. |
 | **Hallucinated tool** (model calls a tool that doesn't exist) | The registry returns `Error: unknown tool "X". Available tools: ...` as an observation, so the model can self-correct on the next turn.                                          |
-| **Malformed tool arguments**                                  | Each tool validates its own input and returns `Error: ...` strings (e.g. calculator rejects non-string `expression`).                                                            |
+| **Malformed tool arguments**                                  | Zod `argsSchema` in the registry returns `Error: invalid arguments...` before `execute`. Tools may still validate domain rules (e.g. division by zero).                          |
+| **HTTP 429 / 5xx from the LLM**                               | `withRetry` retries a few times with backoff. 400 is not retried.                                                                                                                |
+| **Repeated identical tool calls**                             | Fingerprint of name+args; the second call is blocked and observed as an error.                                                                                                   |
+| **Unbounded history**                                         | Oldest complete turns are dropped (`AGENT_KEEP_LAST_TURNS`).                                                                                                                     |
+| **Token spend**                                               | Optional cumulative budget; stop with a partial answer, same shape as the iteration cap.                                                                                         |
 | **Tool crashes**                                              | `executeTool` wraps every call in try/catch and converts exceptions into error observations.                                                                                     |
 | **Missing API key**                                           | The CLI fails fast at startup with a clear message, before any API call.                                                                                                         |
 | **Empty final answer** (model ends its turn with no text)     | The loop substitutes an explicit "finished without a final text answer" message.                                                                                                 |
@@ -98,9 +112,8 @@ When the model requests several tools in one turn, we run them in order, sequent
 
 ## What's missing / not production-ready
 
-- **No persistent memory or vector store** — history lives in RAM for one run; nothing is remembered across runs.
-- **No retry/backoff or rate-limit handling** — a 429 or transient network error fails the run immediately.
-- **No cost/token tracking** — the API returns `usage` per call; we ignore it. Streaming does not add a budget cap.
+- **No persistent memory or vector store** — history lives in RAM for one run; trim only keeps a window, it does not persist across runs.
+- **Retry is only for LLM HTTP 429/5xx** — no retry of tool execution, no rate-limit scheduler beyond backoff.
 - **No eval harness or regression tests for agent behavior** — unit tests cover tools, parsing, loop mechanics, and the stream mapper with a fake LLM, but nothing measures end-to-end answer quality against real model outputs.
 - **No guardrails or output validation** — the final answer is returned unchecked; there is no schema validation, content filtering, or factuality check.
 - **No concurrency or parallel tool execution** — tools run one at a time, in order.
@@ -112,12 +125,9 @@ When the model requests several tools in one turn, we run them in order, sequent
 
 ## If I were to productionize this
 
-- Add retry with exponential backoff and rate-limit-aware scheduling around API calls.
-- Stream responses (`messages.stream`) and surface tokens live in the CLI. **Done** (this branch): acting turns stream; planning is still a blocking `complete()` call.
-- Track token usage and cost per run; add a budget cap alongside the iteration cap.
-- Add a persistent memory layer (e.g. SQLite/Postgres + embeddings) with explicit read/write tools.
-- Introduce an eval harness: recorded scenarios, golden answers, and CI gates on agent behavior.
-- Validate tool inputs with Zod schemas generated from the tool definitions; validate final answers against an output contract.
+- Add retry with exponential backoff and rate-limit-aware scheduling around API calls. **Done** for 429/5xx inside the loop (not a full scheduler).
+- Track token usage and cost per run; add a budget cap alongside the iteration cap. **Done** for a cumulative token budget (not dollar cost).
+- Validate tool inputs with Zod schemas generated from the tool definitions; validate final answers against an output contract. **Done** for tool args; final answers still unchecked.
 - Run independent tool calls in parallel (`Promise.all`) with per-tool timeouts.
 - Instrument with OpenTelemetry: one span per LLM call and per tool execution.
 - Sandbox tool execution (subprocess, container, or WASM) before adding any tool that touches the filesystem, network, or shell.

@@ -13,7 +13,7 @@ plan -> act -> observe -> reflect -> (loop) -> answer
 1. Takes a user goal as text input from the CLI.
 2. Asks the LLM to break the goal into a short plan (a JSON step list).
 3. Loops: the LLM decides which tool to call, the tool runs, the output goes back to the LLM as an observation.
-4. Stops when the LLM produces a final answer, or when a max-iteration safety cap is hit.
+4. Stops when the LLM produces a final answer, or when a max-iteration / token-budget cap is hit.
 5. Prints the full trace (`[plan]`, `[act]`, `[observe]`, `[reflect]`, `[answer]`) plus the final answer.
 
 ### Built-in tools
@@ -39,6 +39,9 @@ Optional environment variables (see `.env.example`):
 
 - `ANTHROPIC_MODEL` — defaults to `claude-sonnet-4-5`
 - `AGENT_MAX_ITERATIONS` — defaults to `8`
+- `AGENT_TOKEN_BUDGET` — cumulative input+output tokens; `0` / unset = unlimited
+- `AGENT_KEEP_LAST_TURNS` — history window (default `6` pairs). `0` = never trim
+- `AGENT_RETRY_ATTEMPTS` / `AGENT_RETRY_DELAY_MS` — 429/5xx retries (default 2 extra tries, 200ms)
 
 ## Run it
 
@@ -116,6 +119,7 @@ src/
     bootstrap.ts         shared argv / env / abort wiring
   agent/
     loop.ts              the plan-act-observe-reflect loop
+    loop-guards.ts       retry, token budget helpers, stuck-call fingerprint, history trim
     planner.ts           planning call + fallback
     prompts.ts           system prompts
     anthropic-client.ts  the only file that imports the Anthropic SDK
@@ -138,6 +142,7 @@ tests/                   vitest: tools, plan parsing, and the loop (fake LLM)
 1. Create `src/tools/my-tool.ts` and export a `ToolDefinition`:
 
 ```ts
+import { z } from 'zod';
 import type { ToolDefinition } from '../types/index.js';
 
 export const myTool: ToolDefinition = {
@@ -150,9 +155,8 @@ export const myTool: ToolDefinition = {
     },
     required: ['query'],
   },
+  argsSchema: z.object({ query: z.string().min(1) }),
   execute: (input) => {
-    // Validate input yourself — it comes from the model.
-    if (typeof input.query !== 'string') return 'Error: "query" must be a string.';
     return `You searched for: ${input.query}`;
   },
 };

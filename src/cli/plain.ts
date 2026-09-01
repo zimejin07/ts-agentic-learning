@@ -30,7 +30,7 @@ export async function runPlainCli(): Promise<void> {
     console.log('\n\n--- Final answer ---');
     log.answer(result.answer);
 
-    if (result.hitMaxIterations) {
+    if (result.hitMaxIterations || result.hitTokenBudget) {
       process.exitCode = 2;
     }
   } catch (error: unknown) {

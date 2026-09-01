@@ -86,7 +86,7 @@ export function App(props: AppProps): React.ReactElement {
       .then((result) => {
         flushTokens();
         setAnswer(result.answer);
-        setHitCap(result.hitMaxIterations);
+        setHitCap(result.hitMaxIterations || result.hitTokenBudget);
         setStatus('done');
         exit();
       })

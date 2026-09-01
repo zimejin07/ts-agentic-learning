@@ -27,3 +27,30 @@ export function getMaxIterations(): number {
   const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 8;
 }
+
+/** Cumulative input+output token cap. Unset or 0 = unlimited. */
+export function getTokenBudget(): number | undefined {
+  const raw = process.env.AGENT_TOKEN_BUDGET;
+  const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+/** How many assistant/user pairs to keep. Default 6. 0 = never trim. */
+export function getKeepLastTurns(): number {
+  const raw = process.env.AGENT_KEEP_LAST_TURNS;
+  const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 6;
+}
+
+/** Extra LLM attempts after a retryable error. Default 2 (3 tries total). */
+export function getRetryAttempts(): number {
+  const raw = process.env.AGENT_RETRY_ATTEMPTS;
+  const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 2;
+}
+
+export function getRetryDelayMs(): number {
+  const raw = process.env.AGENT_RETRY_DELAY_MS;
+  const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 200;
+}

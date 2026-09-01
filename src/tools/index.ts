@@ -23,8 +23,18 @@ export async function executeTool(name: string, input: Record<string, unknown>):
     // The model hallucinated a tool name — tell it what actually exists.
     return `Error: unknown tool "${name}". Available tools: ${tools.map((t) => t.name).join(', ')}.`;
   }
+  let args = input;
+  if (tool.argsSchema) {
+    const parsed = tool.argsSchema.safeParse(input);
+    if (!parsed.success) {
+      const detail =
+        parsed.error.issues.map((issue) => issue.message).join('; ') || 'invalid input';
+      return `Error: invalid arguments for "${name}": ${detail}`;
+    }
+    args = parsed.data;
+  }
   try {
-    return await tool.execute(input);
+    return await tool.execute(args);
   } catch (error) {
     return `Error while running "${name}": ${error instanceof Error ? error.message : String(error)}`;
   }
