@@ -1,3 +1,8 @@
+/**
+ * Scripted HITL booking through runAgent (no API key).
+ * Covers: approve → PNR, decline → no ticket, unknown fare never prompts,
+ * decline then identical args blocked by the stuck-call fingerprint.
+ */
 import { beforeEach, describe, expect, it } from 'vitest';
 import { runAgent } from '../src/agent/loop.js';
 import { fareIdFor, FLIGHTS, getBookings, resetAirlineStore } from '../src/tools/airline.js';

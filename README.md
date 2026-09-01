@@ -8,13 +8,21 @@ The point of this repo is **learning the core agentic pattern**, not building a 
 plan -> act -> observe -> reflect -> (loop) -> answer
 ```
 
+**How to read this repo**
+
+1. [LEARNING.md](LEARNING.md) — stacked lessons (loop → streaming → loop engineering → HITL booking), what to run, what to notice.
+2. This README — setup, commands, tools, layout.
+3. [ARCHITECTURE.md](ARCHITECTURE.md) — design decisions and failure modes.
+
+You need an Anthropic API key to run the CLI. `pnpm test` does not: the loop is driven by a fake LLM.
+
 ## What it does
 
 1. Takes a user goal as text input from the CLI.
 2. Asks the LLM to break the goal into a short plan (a JSON step list).
 3. Loops: the LLM decides which tool to call, the tool runs, the output goes back to the LLM as an observation.
 4. Stops when the LLM produces a final answer, or when a max-iteration / token-budget cap is hit.
-5. Prints the full trace (`[plan]`, `[act]`, `[observe]`, `[reflect]`, `[answer]`) plus the final answer.
+5. Prints the full trace (`[plan]`, `[act]`, `[observe]`, `[reflect]`, `[approve]`, `[answer]`) plus the final answer.
 
 ### Built-in tools
 
@@ -46,6 +54,8 @@ Optional environment variables (see `.env.example`):
 - `AGENT_KEEP_LAST_TURNS` — history window (default `6` pairs). `0` = never trim
 - `AGENT_RETRY_ATTEMPTS` / `AGENT_RETRY_DELAY_MS` — 429/5xx retries (default 2 extra tries, 200ms)
 
+`--yes` is a **CLI flag**, not an env var: auto-approve `book_flight`. Without it, a TTY asks `y/n` and a pipe declines.
+
 ## Run it
 
 ```bash
@@ -64,7 +74,7 @@ pnpm start --yes "Book the cheapest SFO to JFK on 2026-09-15 for Ada Lovelace."
 
 `pnpm start` falls back to the plain logger automatically when stdout is not a TTY. Press **Ctrl+C** to abort an in-flight request. Piped stdin without `--yes` **declines** `book_flight` (safe default).
 
-Example plain output (abridged):
+### Example: calculator / time
 
 ```
 [plan]
@@ -78,6 +88,30 @@ Example plain output (abridged):
 --- Final answer ---
 [answer]  It is currently ... and 24 * 7 = 168.
 ```
+
+### Example: airline booking (HITL)
+
+The catalog is fake. AA100 ($329, 07:15 SFO→JFK on 2026-09-15) is the intended hit for the demo goal. Full table and decline path: [LEARNING.md](LEARNING.md).
+
+```
+[plan]
+1. Search SFO→JFK on 2026-09-15 under $400
+2. Quote a fare
+3. Book for Ada Lovelace
+[act]     search_flights({"origin":"SFO","destination":"JFK","date":"2026-09-15","max_price":400})
+[observe] FARE-AA100-2026-09-15 | AA100 | SFO→JFK | 2026-09-15 07:15–16:05 | $329
+          …
+[act]     get_fare({"fare_id":"FARE-AA100-2026-09-15"})
+[observe] Quoted FARE-AA100-2026-09-15
+[act]     book_flight({"fare_id":"FARE-AA100-2026-09-15","passenger":"Ada Lovelace"})
+[approve] Book AA100 SFO→JFK on 2026-09-15 07:15 for Ada Lovelace at $329
+          ← type y or n (or pass --yes)
+[observe] Booked. PNR-1001 | AA100 SFO→JFK 2026-09-15 | Ada Lovelace | USD 329
+--- Final answer ---
+[answer]  Booked AA100 for Ada Lovelace. Confirmation PNR-1001.
+```
+
+On `n`, the observation is `Error: user declined book_flight. Do not retry the same booking.` Retrying the same args is blocked by the stuck-call fingerprint.
 
 ## How the agent loop works
 
@@ -115,7 +149,7 @@ Example plain output (abridged):
 - **Loop** — repeats until the model answers without calling tools, or `AGENT_MAX_ITERATIONS` is reached.
 - **HITL** — tools marked `requiresApproval` (today: `book_flight`) pause after Zod/preflight. The human's yes/no comes back as a normal observation, not a special control plane. Invalid args never prompt.
 
-The conversation history **is** the agent's memory — there is no other state store. See [ARCHITECTURE.md](ARCHITECTURE.md) for the design decisions and failure-mode analysis.
+The conversation history **is** the agent's memory — there is no other state store the model can see. Airline quotes/PNRs live in a tiny process table; the model only learns about them through observations. See [LEARNING.md](LEARNING.md) for the curriculum and [ARCHITECTURE.md](ARCHITECTURE.md) for design decisions.
 
 ## Project layout
 
@@ -146,7 +180,9 @@ src/
     env.ts               env loading (API key, model, max iterations)
     logger.ts            colored per-phase console output
     parse-plan.ts        lenient JSON plan parser
-tests/                   vitest: tools, plan parsing, and the loop (fake LLM)
+tests/                   vitest: tools, plan parsing, loop, loop-guards, HITL booking (fake LLM)
+LEARNING.md              curriculum: what each layer teaches
+ARCHITECTURE.md          design decisions and failure modes
 ```
 
 ## How to add a new tool
@@ -181,11 +217,13 @@ That's it — the loop, the prompts, and the Anthropic tool schema pick it up au
 ## Tests and checks
 
 ```bash
-pnpm test        # vitest (no API key needed — the loop is tested with a fake LLM)
+pnpm test        # vitest (no API key — FakeClient scripts the LLM)
 pnpm lint        # eslint
 pnpm typecheck   # tsc --noEmit
 pnpm format      # prettier
 ```
+
+Which test file maps to which lesson is in [LEARNING.md](LEARNING.md).
 
 ## Assumptions
 

@@ -20,6 +20,7 @@ export interface Flight {
 }
 
 export const FLIGHTS: Flight[] = [
+  // Morning SFO→JFK on the demo date, under $400 — intended booking.
   {
     number: 'AA100',
     origin: 'SFO',
@@ -29,6 +30,7 @@ export const FLIGHTS: Flight[] = [
     arrives: '16:05',
     priceUsd: 329,
   },
+  // Second valid option under the $400 cap (later morning).
   {
     number: 'UA200',
     origin: 'SFO',
@@ -38,6 +40,7 @@ export const FLIGHTS: Flight[] = [
     arrives: '18:20',
     priceUsd: 389,
   },
+  // Same route/date but $455 — filtered out by max_price: 400.
   {
     number: 'DL300',
     origin: 'SFO',
@@ -47,6 +50,7 @@ export const FLIGHTS: Flight[] = [
     arrives: '21:45',
     priceUsd: 455,
   },
+  // Wrong date.
   {
     number: 'AA400',
     origin: 'SFO',
@@ -56,6 +60,7 @@ export const FLIGHTS: Flight[] = [
     arrives: '16:50',
     priceUsd: 310,
   },
+  // Wrong origin.
   {
     number: 'UA500',
     origin: 'LAX',
@@ -65,6 +70,7 @@ export const FLIGHTS: Flight[] = [
     arrives: '15:10',
     priceUsd: 275,
   },
+  // Wrong destination.
   {
     number: 'B6900',
     origin: 'SFO',

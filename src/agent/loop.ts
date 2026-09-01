@@ -58,6 +58,9 @@ export interface RunAgentOptions {
  *   - token budget alongside the iteration cap
  *   - refuse duplicate tool+args
  *   - trim old turns so history cannot grow forever
+ *
+ * HITL: executeTool asks onApprove for requiresApproval tools *after* Zod and
+ * preflight. A decline is an observation; the fingerprint then blocks retries.
  */
 export async function runAgent(options: RunAgentOptions): Promise<AgentResult> {
   const { goal, client, tools, maxIterations, onEvent, onToken, abortSignal, onApprove } = options;

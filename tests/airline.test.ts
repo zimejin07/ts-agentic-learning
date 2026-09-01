@@ -1,3 +1,7 @@
+/**
+ * Catalog + registry tests for the mock airline.
+ * HITL is only asked after a successful quote; unknown/unquoted fares skip the prompt.
+ */
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   FLIGHTS,

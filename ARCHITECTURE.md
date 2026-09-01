@@ -2,6 +2,8 @@
 
 An AI-engineering-oriented walkthrough of how this agent is built, why it is built that way, and where it would break in production.
 
+If you want the **curriculum** (what to run, what each file teaches), start with [LEARNING.md](LEARNING.md). This document is the design rationale.
+
 ## High-level system diagram
 
 ```mermaid
@@ -40,7 +42,19 @@ The unit of state is the **message history** (`ChatMessage[]`). Each iteration:
 
 Acting turns prefer `client.stream()` when the provider implements it (`messages.stream()` under the hood). Each `text_delta` is forwarded to `onToken` for live CLI rendering. Tokens are **not** stored in the trace. Planning still uses `complete()` so the JSON plan stays a single parseable blob. Clients that omit `stream()` (including the vitest FakeClient) keep working via `complete()`.
 
-A parallel **trace** (`TraceEvent[]`) records every phase for the console and the final result. It is derived state — the model never sees it.
+A parallel **trace** (`TraceEvent[]`) records every phase for the console and the final result. It is derived state — the model never sees it. Trace types: `plan`, `act`, `observe`, `reflect`, `approve`, `warning`, `answer`.
+
+## Registry pipeline
+
+`executeTool` is the only way a tool runs. Order is the HITL lesson:
+
+1. **Unknown name** → `Error: unknown tool "…"`. The model can recover.
+2. **Zod `argsSchema`** → invalid JSON types never reach `execute` or the human.
+3. **`preflight`** → domain rules (unknown `fare_id`, fare not quoted). Still no HITL.
+4. **`requiresApproval`** → `onApprove`. Missing callback / non-TTY without `--yes` → **deny**.
+5. **`execute`** → wrapped in try/catch; crashes become error strings.
+
+Decline and preflight failures are ordinary `tool_result` text. The loop does not special-case them beyond emitting `[approve]` / `[warn]` on the trace.
 
 ## Design decisions and why
 
@@ -90,6 +104,8 @@ The prompt can _ask_ the model not to repeat itself. The loop now _enforces_ a f
 ### A mock airline desk (search → quote → book)
 
 The calculator/time/search tools are one-shot Q&A. The airline tools are a **workflow**: the model must carry a `fare_id` through history, quote before booking, and wait for a human on the only write. Catalog, quotes, and PNRs live in process memory (`resetAirlineStore` in tests). There is no payment, GDS, or email — the lesson is the gate, not aviation.
+
+Why those six flights exist (morning under $400, over-cap afternoon, wrong date/origin/destination) is tabulated in [LEARNING.md](LEARNING.md). `book_flight` is the only tool with `requiresApproval: true`. Search and quote are cheap on purpose so the human is only asked at the irreversible step.
 
 ### Tools never throw
 
