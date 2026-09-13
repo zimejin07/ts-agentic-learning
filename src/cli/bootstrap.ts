@@ -1,29 +1,34 @@
 import type { TraceEvent } from '../types/index.js';
 import { AnthropicLlmClient } from '../agent/anthropic-client.js';
 import { getApiKey, getMaxIterations, getModel } from '../utils/env.js';
+import { parseCliArgs } from './approve.js';
 
 export interface CliConfig {
   goal: string;
   model: string;
   maxIterations: number;
   client: AnthropicLlmClient;
+  autoApprove: boolean;
 }
 
 export function parseGoal(argv: string[]): string {
-  return argv.slice(2).join(' ').trim();
+  return parseCliArgs(argv).goal;
 }
 
 export function printUsage(command: string): void {
-  console.error(`Usage: ${command} "<your goal>"`);
-  console.error('Example: pnpm start "What time is it, and what is 24 * 7?"');
+  console.error(`Usage: ${command} [--yes] "<your goal>"`);
+  console.error('  --yes  auto-approve side-effecting tools (book_flight)');
+  console.error(
+    'Example: pnpm start "Find a morning flight from SFO to JFK on 2026-09-15 under $400 and book it for Ada Lovelace."',
+  );
 }
 
 export function loadCliConfig(): CliConfig {
   const model = getModel();
   const maxIterations = getMaxIterations();
   const client = new AnthropicLlmClient(getApiKey(), model);
-  const goal = parseGoal(process.argv);
-  return { goal, model, maxIterations, client };
+  const { goal, autoApprove } = parseCliArgs(process.argv);
+  return { goal, model, maxIterations, client, autoApprove };
 }
 
 export function printTraceEvent(
@@ -45,6 +50,9 @@ export function printTraceEvent(
       break;
     case 'warning':
       log.warn(event.message);
+      break;
+    case 'approve':
+      log.approve(event.message);
       break;
     case 'answer':
       break;

@@ -19,7 +19,8 @@ export interface Plan {
 }
 
 /** The phases of the loop, used both for console logging and the final trace. */
-export type TraceEventType = 'plan' | 'act' | 'observe' | 'reflect' | 'answer' | 'warning';
+export type TraceEventType =
+  'plan' | 'act' | 'observe' | 'reflect' | 'answer' | 'warning' | 'approve';
 
 export interface TraceEvent {
   type: TraceEventType;
@@ -61,6 +62,14 @@ export interface ArgsSchema {
     | { success: false; error: { issues: Array<{ message: string }> } };
 }
 
+/** Human-in-the-loop gate for a side-effecting tool. */
+export interface ApprovalRequest {
+  toolName: string;
+  input: Record<string, unknown>;
+  /** One-line description shown in the CLI / tests. */
+  summary: string;
+}
+
 /**
  * A tool the agent can call. `execute` receives args already checked against
  * `argsSchema` when one is set (the registry runs that parse first).
@@ -70,6 +79,18 @@ export interface ToolDefinition {
   description: string;
   inputSchema: ToolInputSchema;
   argsSchema?: ArgsSchema;
+  /**
+   * When true, the registry asks `onApprove` after Zod/preflight and before
+   * `execute`. Read-only tools omit this.
+   */
+  requiresApproval?: boolean;
+  /**
+   * Domain check after Zod, before HITL. Return an error string to skip both
+   * the approval prompt and execute (e.g. unknown fare_id).
+   */
+  preflight?: (input: Record<string, unknown>) => string | undefined;
+  /** Human-readable summary for the approval prompt. */
+  approvalSummary?: (input: Record<string, unknown>) => string;
   execute: (input: Record<string, unknown>) => Promise<string> | string;
 }
 
