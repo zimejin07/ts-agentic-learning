@@ -12,3 +12,12 @@ export const todos = sqliteTable('todos', {
 });
 
 export type TodoRow = typeof todos.$inferSelect;
+
+export const idempotencyKeys = sqliteTable('idempotency_keys', {
+  key: text('key').primaryKey(),
+  method: text('method').notNull(),
+  path: text('path').notNull(),
+  responseStatus: integer('response_status').notNull(),
+  responseBody: text('response_body').notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+});
