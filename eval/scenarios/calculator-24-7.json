@@ -1,0 +1,37 @@
+{
+  "id": "calculator-24-7",
+  "goal": "What is 24 * 7?",
+  "maxIterations": 8,
+  "scriptedResponses": [
+    {
+      "stopReason": "end_turn",
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"steps\":[{\"id\":1,\"description\":\"Compute 24 * 7\"}]}"
+        }
+      ]
+    },
+    {
+      "stopReason": "tool_use",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "calc-1",
+          "name": "calculator",
+          "input": { "expression": "24 * 7" }
+        }
+      ]
+    },
+    {
+      "stopReason": "end_turn",
+      "content": [{ "type": "text", "text": "24 * 7 is 168." }]
+    }
+  ],
+  "expect": {
+    "answerContains": ["168"],
+    "toolsCalled": ["calculator"],
+    "hitMaxIterations": false,
+    "planStepCount": 1
+  }
+}

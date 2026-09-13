@@ -84,6 +84,10 @@ There is exactly one memory: the in-memory conversation history, which grows by 
 
 When the model requests several tools in one turn, we run them in order, sequentially. Parallel execution would be faster but complicates the trace, error attribution, and the beginner-facing narrative. It is listed in the roadmap.
 
+### Eval harness (this branch)
+
+`eval/` runs the same `runAgent` loop as production, but injects a `FakeClient` whose replies are checked into `eval/scenarios/*.json`. Graders are mechanical (`answerContains`, `toolsCalled`, `hitMaxIterations`, `planStepCount`) so CI does not need an API key and cannot flake on model drift. That is the point: lock the _control flow_ of the agent, not the poetry of the final sentence.
+
 ## Failure modes considered
 
 | Failure mode                                                  | How it is handled                                                                                                                                                                |
@@ -100,6 +104,32 @@ When the model requests several tools in one turn, we run them in order, sequent
 
 ## What's missing / not production-ready
 
+- **No persistent memory or vector store** — history lives in RAM for one run; nothing is remembered across runs.
+- **No retry/backoff or rate-limit handling** — a 429 or transient network error fails the run immediately.
+- **No streaming** — each LLM turn is a blocking call; tokens appear only when the turn completes.
+- **No cost/token tracking** — the API returns `usage` per call; we ignore it.
+- **No eval harness against real models** — `eval/` + GitHub Actions now regress _scripted_ agent behavior (fake LLM, substring/tool/flag checks). There is still no live-model eval, no LLM-as-judge, and no golden-file comparison of free-form prose quality.
+- **No guardrails or output validation** — the final answer is returned unchecked; there is no schema validation, content filtering, or factuality check.
+- **No concurrency or parallel tool execution** — tools run one at a time, in order.
+- **No observability/tracing** (e.g. OpenTelemetry) — the console trace is for humans; there are no spans, metrics, or structured logs.
+- **No sandboxing for tool execution** — tools run in-process with full Node.js privileges. Safe today only because all three tools are pure functions; a `bash` or `fs` tool would be dangerous.
+- **Single-agent only** — no multi-agent patterns, orchestration, or delegation.
+- **No human-in-the-loop approval** — the agent acts without asking permission for anything.
+- **Weak error recovery for unexpected LLM output** — unknown content block types are collapsed to empty text; a truly malformed API response would surface as a confusing answer rather than a structured error.
+
+## If I were to productionize this
+
+- Add retry with exponential backoff and rate-limit-aware scheduling around API calls.
+- Stream responses (`messages.stream`) and surface tokens live in the CLI.
+- Track token usage and cost per run; add a budget cap alongside the iteration cap.
+- Add a persistent memory layer (e.g. SQLite/Postgres + embeddings) with explicit read/write tools.
+- Introduce an eval harness: recorded scenarios, golden answers, and CI gates on agent behavior. **Done** for scripted FakeClient scenarios (`pnpm eval` + `.github/workflows/eval.yml`). Still missing: live-model eval and LLM-as-judge scoring.
+- Validate tool inputs with Zod schemas generated from the tool definitions; validate final answers against an output contract.
+- Run independent tool calls in parallel (`Promise.all`) with per-tool timeouts.
+- Instrument with OpenTelemetry: one span per LLM call and per tool execution.
+- Sandbox tool execution (subprocess, container, or WASM) before adding any tool that touches the filesystem, network, or shell.
+- Add a human-in-the-loop approval step for tools marked as side-effecting.
+- Support multi-agent orchestration (planner/executor/critic roles) once single-agent behavior is well-tested.
 This branch teaches the loop and streaming. It does **not** include:
 
 - Persistent memory (history dies with the process)

@@ -1,0 +1,42 @@
+{
+  "id": "max-iteration-cap",
+  "goal": "Add forever",
+  "maxIterations": 2,
+  "scriptedResponses": [
+    {
+      "stopReason": "end_turn",
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"steps\":[{\"id\":1,\"description\":\"Keep adding\"}]}"
+        }
+      ]
+    },
+    {
+      "stopReason": "tool_use",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "c1",
+          "name": "calculator",
+          "input": { "expression": "1 + 1" }
+        }
+      ]
+    },
+    {
+      "stopReason": "tool_use",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "c2",
+          "name": "calculator",
+          "input": { "expression": "2 + 2" }
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "toolsCalled": ["calculator"],
+    "hitMaxIterations": true
+  }
+}
