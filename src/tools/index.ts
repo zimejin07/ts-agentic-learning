@@ -25,10 +25,12 @@ export interface ExecuteToolOptions {
 }
 
 /**
- * Runs a tool by name. Pipeline (order is the HITL lesson):
- *   unknown name → Zod → preflight → optional y/n → execute
- * Tool/domain failures NEVER throw: they become Error strings the model observes.
- * Abort from the approver (Ctrl+C) is allowed to throw so the CLI can exit.
+ * Runs a tool by name. This function NEVER throws: every failure (unknown
+ * tool, bad arguments, crash inside the tool) is converted into an error
+ * string so the loop can observe it and recover instead of dying.
+ *
+ * Production wrap (see LEARNING.md): schema-validate args *before* execute,
+ * HITL for writes, per-tool timeouts; only abort should throw.
  */
 export async function executeTool(
   name: string,

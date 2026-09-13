@@ -139,8 +139,9 @@ export type StreamEvent =
  * The seam between the agent and any LLM provider. The agent loop only knows
  * this interface, so tests can substitute a fake client with scripted replies.
  *
- * `stream` is optional: clients that omit it still work (the loop falls back
- * to `complete()`). That is why the existing vitest FakeClient needs no changes.
+ * Production: add a second class (OpenAI, Bedrock, …) that maps to these types.
+ * Do not import SDKs from loop.ts. `stream` stays optional so FakeClient and
+ * cheap complete()-only adapters keep working.
  */
 export interface LlmClient {
   complete(request: LlmRequest): Promise<LlmResponse>;

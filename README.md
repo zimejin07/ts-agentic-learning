@@ -12,6 +12,8 @@ plan -> act -> observe -> reflect -> (loop) -> answer
 
 1. [LEARNING.md](LEARNING.md) — stacked lessons (loop → streaming → loop engineering → HITL booking), what to run, what to notice.
 2. This README — setup, commands, tools, layout.
+1. [LEARNING.md](LEARNING.md) — master each concept, then map it to production (keep / change / add).
+2. This README — setup, commands, layout, adding a tool.
 3. [ARCHITECTURE.md](ARCHITECTURE.md) — design decisions and failure modes.
 
 You need an Anthropic API key to run the CLI. `pnpm test` does not: the loop is driven by a fake LLM.
@@ -150,6 +152,7 @@ On `n`, the observation is `Error: user declined book_flight. Do not retry the s
 - **HITL** — tools marked `requiresApproval` (today: `book_flight`) pause after Zod/preflight. The human's yes/no comes back as a normal observation, not a special control plane. Invalid args never prompt.
 
 The conversation history **is** the agent's memory — there is no other state store the model can see. Airline quotes/PNRs live in a tiny process table; the model only learns about them through observations. See [LEARNING.md](LEARNING.md) for the curriculum and [ARCHITECTURE.md](ARCHITECTURE.md) for design decisions.
+The conversation history **is** the agent's memory — there is no other state store. See [LEARNING.md](LEARNING.md) to master that idea and [ARCHITECTURE.md](ARCHITECTURE.md) for design decisions.
 
 ## Project layout
 
@@ -182,6 +185,8 @@ src/
     parse-plan.ts        lenient JSON plan parser
 tests/                   vitest: tools, plan parsing, loop, loop-guards, HITL booking (fake LLM)
 LEARNING.md              curriculum: what each layer teaches
+tests/                   vitest: tools, plan parsing, loop, stream mapper (fake LLM)
+LEARNING.md              concepts → production mapping
 ARCHITECTURE.md          design decisions and failure modes
 ```
 
@@ -213,6 +218,9 @@ export const myTool: ToolDefinition = {
 2. Register it in `src/tools/index.ts` by adding it to the `tools` array.
 
 That's it — the loop, the prompts, and the Anthropic tool schema pick it up automatically. Rules of thumb: never throw from `execute` (return `Error: ...` strings), and never use `eval`. For a side-effecting tool, set `requiresApproval: true` and optionally `preflight` (domain errors skip the prompt) plus `approvalSummary`.
+That's it — the loop, the prompts, and the Anthropic tool schema pick it up automatically. Rules of thumb: never throw from `execute` (return `Error: ...` strings), never use `eval`, and treat every argument as untrusted model output.
+
+In production you would also: schema-validate at the **registry** (not only inside the tool), mark writes as needing human approval, and run anything that touches disk/network/shell in a sandbox. That mapping is in [LEARNING.md](LEARNING.md).
 
 ## Tests and checks
 
@@ -229,5 +237,10 @@ Which test file maps to which lesson is in [LEARNING.md](LEARNING.md).
 
 - `web_search` and the airline catalog are intentionally fake: deterministic, free, and safe for tests. No real tickets, payments, or web search.
 - `book_flight` is the only irreversible step. Search and quote are free; the human is the payment rail.
+What each test file is proving: [LEARNING.md](LEARNING.md) (tests as checkpoints).
+
+## Assumptions
+
+- `web_search` is intentionally fake: deterministic, free, and safe for tests. Swapping in a real search API only means rewriting its `execute` — plus allowlists, timeouts, and treating the snippet as **untrusted** text.
 - The plan is **advisory**: the acting loop sees it but may skip or reorder steps.
-- This is a learning demo, not production software — see the "not production-ready" section of [ARCHITECTURE.md](ARCHITECTURE.md).
+- This is a learning demo, not production software. [LEARNING.md](LEARNING.md) Part 2 is the production extension map; [ARCHITECTURE.md](ARCHITECTURE.md) lists what this branch does not do.

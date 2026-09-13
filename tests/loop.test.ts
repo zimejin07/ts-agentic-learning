@@ -1,3 +1,10 @@
+/**
+ * Loop checkpoints (no API key).
+ *
+ * FakeClient implements LlmClient with a scripted queue — the same seam you
+ * would use in production CI. Covers: happy path, unknown tool, plan fallback,
+ * max-iteration cap, and stream() vs complete().
+ */
 import { describe, expect, it } from 'vitest';
 import { chunkText } from '../src/agent/stream-mapper.js';
 import { runAgent } from '../src/agent/loop.js';
