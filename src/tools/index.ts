@@ -14,8 +14,10 @@ const registry = new Map(tools.map((tool) => [tool.name, tool]));
 /**
  * Runs a tool by name. This function NEVER throws: every failure (unknown
  * tool, bad arguments, crash inside the tool) is converted into an error
- * string, so the agent loop can feed it back to the model as an observation
- * and let it recover instead of dying.
+ * string so the loop can observe it and recover instead of dying.
+ *
+ * Production wrap (see LEARNING.md): schema-validate args *before* execute,
+ * HITL for writes, per-tool timeouts; only abort should throw.
  */
 export async function executeTool(name: string, input: Record<string, unknown>): Promise<string> {
   const tool = registry.get(name);

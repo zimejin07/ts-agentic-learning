@@ -15,11 +15,16 @@ export interface PlanOutcome {
  * step. A broken plan should degrade the run, never crash it — the agent loop
  * can still make progress without a plan.
  */
-export async function createPlan(goal: string, client: LlmClient): Promise<PlanOutcome> {
+export async function createPlan(
+  goal: string,
+  client: LlmClient,
+  abortSignal?: AbortSignal,
+): Promise<PlanOutcome> {
   const response = await client.complete({
     system: PLANNING_SYSTEM_PROMPT,
     messages: [{ role: 'user', content: `Goal: ${goal}` }],
     maxTokens: 512,
+    abortSignal,
   });
 
   const text = response.content

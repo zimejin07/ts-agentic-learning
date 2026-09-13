@@ -2,6 +2,8 @@
 
 An AI-engineering-oriented walkthrough of how this agent is built, why it is built that way, and where it would break in production.
 
+To **learn** the concepts and then extend them, start with [LEARNING.md](LEARNING.md). This file is the design rationale for _this_ branch (hand-written loop + streaming CLI).
+
 ## High-level system diagram
 
 ```mermaid
@@ -32,6 +34,8 @@ The unit of state is the **message history** (`ChatMessage[]`). Each iteration:
 4. Each `tool_use` is executed; its output string becomes a `tool_result` block in a new user message.
 5. Repeat until a turn contains no `tool_use` blocks (that turn's text is the answer) or the iteration cap fires.
 
+Acting turns prefer `client.stream()` when the provider implements it (`messages.stream()` under the hood). Each `text_delta` is forwarded to `onToken` for live CLI rendering. Tokens are **not** stored in the trace. Planning still uses `complete()` so the JSON plan stays a single parseable blob. Clients that omit `stream()` (including the vitest FakeClient) keep working via `complete()`.
+
 A parallel **trace** (`TraceEvent[]`) records every phase for the console and the final result. It is derived state — the model never sees it.
 
 ## Design decisions and why
@@ -53,6 +57,16 @@ The plan is **advisory**, not enforced: it is injected into the first user messa
 ### Native `tool_use` instead of parsing free text
 
 Tools are declared to the API with JSON schemas, and the model returns structured `tool_use` blocks. This is far more reliable than asking the model to print `TOOL: calculator ARGS: {...}` and parsing it — the API constrains the output shape for us.
+
+### Streaming vs `complete()`
+
+The Anthropic client implements both. `complete()` is a single blocking `messages.create` — still used for the planner. `stream()` uses `messages.stream()` and a `StreamAssembler` that:
+
+- forwards `text_delta` immediately (live tokens)
+- buffers `input_json_delta` until `content_block_stop`, then emits one `tool_use`
+- emits `message_complete` on `message_stop` (same shape as `complete()`)
+
+**Backpressure:** the CLI pulls events with `for await`. If Ink is slow, the iterator pauses, which pauses reading the HTTP body. Ink itself buffers token deltas and flushes React state every ~50ms so we do not re-render on every token.
 
 ### The `LlmClient` seam
 
@@ -86,29 +100,29 @@ When the model requests several tools in one turn, we run them in order, sequent
 
 ## What's missing / not production-ready
 
-- **No persistent memory or vector store** — history lives in RAM for one run; nothing is remembered across runs.
-- **No retry/backoff or rate-limit handling** — a 429 or transient network error fails the run immediately.
-- **No streaming** — each LLM turn is a blocking call; tokens appear only when the turn completes.
-- **No cost/token tracking** — the API returns `usage` per call; we ignore it.
-- **No eval harness or regression tests for agent behavior** — unit tests cover tools, parsing, and loop mechanics with a fake LLM, but nothing measures end-to-end answer quality against real model outputs.
-- **No guardrails or output validation** — the final answer is returned unchecked; there is no schema validation, content filtering, or factuality check.
-- **No concurrency or parallel tool execution** — tools run one at a time, in order.
-- **No observability/tracing** (e.g. OpenTelemetry) — the console trace is for humans; there are no spans, metrics, or structured logs.
-- **No sandboxing for tool execution** — tools run in-process with full Node.js privileges. Safe today only because all three tools are pure functions; a `bash` or `fs` tool would be dangerous.
-- **Single-agent only** — no multi-agent patterns, orchestration, or delegation.
-- **No human-in-the-loop approval** — the agent acts without asking permission for anything.
-- **Weak error recovery for unexpected LLM output** — unknown content block types are collapsed to empty text; a truly malformed API response would surface as a confusing answer rather than a structured error.
+This branch teaches the loop and streaming. It does **not** include:
 
-## If I were to productionize this
+- Persistent memory (history dies with the process)
+- Retry/backoff or rate-limit handling (a 429 fails the run)
+- Token/cost tracking or a budget cap (we ignore provider `usage`)
+- Zod (or any schema) at the registry — each tool validates itself
+- Eval of answer quality (FakeClient tests mechanics only)
+- Guardrails / final-answer contracts
+- Parallel tool execution
+- OpenTelemetry (the console trace is for humans)
+- Sandboxing (tools are in-process with full Node privileges — safe only because they are pure)
+- Multi-agent orchestration
+- Human-in-the-loop for side effects (there are no side-effecting tools yet)
+- Treating tool output as untrusted (prompt injection via observations)
 
-- Add retry with exponential backoff and rate-limit-aware scheduling around API calls.
-- Stream responses (`messages.stream`) and surface tokens live in the CLI.
-- Track token usage and cost per run; add a budget cap alongside the iteration cap.
-- Add a persistent memory layer (e.g. SQLite/Postgres + embeddings) with explicit read/write tools.
-- Introduce an eval harness: recorded scenarios, golden answers, and CI gates on agent behavior.
-- Validate tool inputs with Zod schemas generated from the tool definitions; validate final answers against an output contract.
-- Run independent tool calls in parallel (`Promise.all`) with per-tool timeouts.
-- Instrument with OpenTelemetry: one span per LLM call and per tool execution.
-- Sandbox tool execution (subprocess, container, or WASM) before adding any tool that touches the filesystem, network, or shell.
-- Add a human-in-the-loop approval step for tools marked as side-effecting.
-- Support multi-agent orchestration (planner/executor/critic roles) once single-agent behavior is well-tested.
+How to take each idea into a real app is the table in [LEARNING.md](LEARNING.md) Part 2, not a second copy here.
+
+## From this demo to production (short)
+
+Keep: inspectable loop, native tools, error-as-observation, `LlmClient` seam, FakeClient tests, hard iteration cap, abort, streaming backpressure.
+
+Change first: schema-validate args **before** `execute`; cap tokens and wall time; persist history without splitting `tool_use`/`tool_result`; retry 429/5xx only.
+
+Add before any write tool: HITL, timeouts, sandbox, idempotency, structured traces.
+
+Optional later in this repo: loop-engineering PR (retry, budget, fingerprint, trim, Zod) and HITL booking PR (workflow + y/n). Read those after this branch's concept map is solid.

@@ -5,7 +5,9 @@ import type {
   LlmClient,
   LlmRequest,
   LlmResponse,
+  StreamEvent,
 } from '../types/index.js';
+import { StreamAssembler, toRawStreamEvent } from './stream-mapper.js';
 
 /**
  * The only file in the project that talks to the Anthropic SDK.
@@ -23,7 +25,57 @@ export class AnthropicLlmClient implements LlmClient {
   }
 
   async complete(request: LlmRequest): Promise<LlmResponse> {
-    const response = await this.client.messages.create({
+    throwIfAborted(request.abortSignal);
+    const response = await this.client.messages.create(
+      { ...this.toCreateParams(request), stream: false },
+      request.abortSignal ? { signal: request.abortSignal } : undefined,
+    );
+
+    return {
+      stopReason: response.stop_reason ?? 'end_turn',
+      content: response.content.map(toContentBlock),
+    };
+  }
+
+  /**
+   * Live token stream. The `for await` here IS the backpressure valve: if the
+   * CLI is slow to pull the next event, this iterator pauses, which pauses
+   * reading the HTTP body.
+   */
+  async *stream(request: LlmRequest): AsyncIterable<StreamEvent> {
+    throwIfAborted(request.abortSignal);
+    const assembler = new StreamAssembler();
+    const sdkStream = this.client.messages.stream(
+      this.toCreateParams(request),
+      request.abortSignal ? { signal: request.abortSignal } : undefined,
+    );
+
+    let yieldedComplete = false;
+    for await (const event of sdkStream) {
+      throwIfAborted(request.abortSignal);
+      const mapped = assembler.push(toRawStreamEvent(event));
+      for (const item of mapped) {
+        if (item.type === 'message_complete') yieldedComplete = true;
+        yield item;
+      }
+    }
+
+    // If the SSE ended without a message_stop event, still emit a complete
+    // payload from the SDK's assembled final message.
+    if (!yieldedComplete) {
+      const final = await sdkStream.finalMessage();
+      yield {
+        type: 'message_complete',
+        response: {
+          stopReason: final.stop_reason ?? 'end_turn',
+          content: final.content.map(toContentBlock),
+        },
+      };
+    }
+  }
+
+  private toCreateParams(request: LlmRequest): Anthropic.MessageCreateParamsNonStreaming {
+    return {
       model: this.model,
       max_tokens: request.maxTokens ?? 1024,
       system: request.system,
@@ -33,12 +85,13 @@ export class AnthropicLlmClient implements LlmClient {
         description: tool.description,
         input_schema: tool.inputSchema as Anthropic.Tool.InputSchema,
       })),
-    });
-
-    return {
-      stopReason: response.stop_reason ?? 'end_turn',
-      content: response.content.map(toContentBlock),
     };
+  }
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw new Error('Aborted');
   }
 }
 

@@ -1,7 +1,15 @@
+/**
+ * Loop checkpoints (no API key).
+ *
+ * FakeClient implements LlmClient with a scripted queue — the same seam you
+ * would use in production CI. Covers: happy path, unknown tool, plan fallback,
+ * max-iteration cap, and stream() vs complete().
+ */
 import { describe, expect, it } from 'vitest';
+import { chunkText } from '../src/agent/stream-mapper.js';
 import { runAgent } from '../src/agent/loop.js';
 import { tools } from '../src/tools/index.js';
-import type { ContentBlock, LlmClient, LlmResponse } from '../src/types/index.js';
+import type { ContentBlock, LlmClient, LlmResponse, StreamEvent } from '../src/types/index.js';
 
 /**
  * A scripted fake LLM. The agent loop only knows the LlmClient interface,
@@ -98,5 +106,69 @@ describe('runAgent', () => {
     expect(result.hitMaxIterations).toBe(true);
     expect(result.iterations).toBe(2);
     expect(result.trace.some((event) => event.message.includes('Max iteration cap'))).toBe(true);
+  });
+});
+
+/**
+ * Fake client that implements stream() by yielding 4-character text chunks.
+ * Used to prove the loop prefers stream over complete and forwards onToken.
+ */
+class StreamingFakeClient implements LlmClient {
+  private queue: LlmResponse[];
+  completeCalls = 0;
+  streamCalls = 0;
+
+  constructor(queue: LlmResponse[]) {
+    this.queue = [...queue];
+  }
+
+  async complete(): Promise<LlmResponse> {
+    this.completeCalls++;
+    return this.next();
+  }
+
+  async *stream(): AsyncIterable<StreamEvent> {
+    this.streamCalls++;
+    const next = this.next();
+    for (const block of next.content) {
+      if (block.type === 'text') {
+        for (const chunk of chunkText(block.text, 4)) {
+          yield { type: 'text_delta', text: chunk };
+        }
+      } else if (block.type === 'tool_use') {
+        yield { type: 'tool_use', id: block.id, name: block.name, input: block.input };
+      }
+    }
+    yield { type: 'message_complete', response: next };
+  }
+
+  private next(): LlmResponse {
+    const next = this.queue.shift();
+    if (!next) throw new Error('StreamingFakeClient ran out of queued responses');
+    return next;
+  }
+}
+
+describe('runAgent with streaming client', () => {
+  it('uses complete() for planning and stream() for acting, forwarding token deltas', async () => {
+    const client = new StreamingFakeClient([
+      { stopReason: 'end_turn', content: [text(PLAN_JSON)] },
+      { stopReason: 'end_turn', content: [text('24 * 7 is 168.')] },
+    ]);
+
+    const tokens: string[] = [];
+    const result = await runAgent({
+      goal: 'What is 24 * 7?',
+      client,
+      tools,
+      maxIterations: 8,
+      onToken: (delta) => tokens.push(delta),
+    });
+
+    expect(client.completeCalls).toBe(1);
+    expect(client.streamCalls).toBe(1);
+    expect(result.answer).toBe('24 * 7 is 168.');
+    expect(tokens.join('')).toBe('24 * 7 is 168.');
+    expect(tokens.length).toBeGreaterThan(1);
   });
 });
