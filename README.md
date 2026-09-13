@@ -8,6 +8,14 @@ The point of this repo is **learning the core agentic pattern**, not building a 
 plan -> act -> observe -> reflect -> (loop) -> answer
 ```
 
+**How to read this repo**
+
+1. [LEARNING.md](LEARNING.md) — master each concept, then map it to production (keep / change / add).
+2. This README — setup, commands, layout, adding a tool.
+3. [ARCHITECTURE.md](ARCHITECTURE.md) — design decisions and failure modes.
+
+You need an Anthropic API key to run the CLI. `pnpm test` does not: the loop is driven by a fake LLM.
+
 ## What it does
 
 1. Takes a user goal as text input from the CLI.
@@ -43,10 +51,16 @@ Optional environment variables (see `.env.example`):
 ## Run it
 
 ```bash
+# Live Ink UI — tokens stream in as they arrive (requires a TTY)
 pnpm start "What time is it, and what is 24 * 7?"
+
+# Plain console logger (pipes, CI, or if you prefer the original output)
+pnpm start:plain "What time is it, and what is 24 * 7?"
 ```
 
-Example output (abridged):
+`pnpm start` falls back to the plain logger automatically when stdout is not a TTY. Press **Ctrl+C** to abort an in-flight request.
+
+Example plain output (abridged):
 
 ```
 [plan]
@@ -96,18 +110,24 @@ Example output (abridged):
 - **Reflect** — any text the model writes alongside tool calls is logged as its reasoning.
 - **Loop** — repeats until the model answers without calling tools, or `AGENT_MAX_ITERATIONS` is reached.
 
-The conversation history **is** the agent's memory — there is no other state store. See [ARCHITECTURE.md](ARCHITECTURE.md) for the design decisions and failure-mode analysis.
+The conversation history **is** the agent's memory — there is no other state store. See [LEARNING.md](LEARNING.md) to master that idea and [ARCHITECTURE.md](ARCHITECTURE.md) for design decisions.
 
 ## Project layout
 
 ```
 src/
-  index.ts               CLI entry point
+  index.tsx              CLI entry (Ink UI on a TTY)
+  cli/
+    App.tsx              Ink layout: live tokens, plan, rolling trace
+    plain.ts             plain logger runner
+    plain-entry.ts       `pnpm start:plain`
+    bootstrap.ts         shared argv / env / abort wiring
   agent/
     loop.ts              the plan-act-observe-reflect loop
     planner.ts           planning call + fallback
     prompts.ts           system prompts
     anthropic-client.ts  the only file that imports the Anthropic SDK
+    stream-mapper.ts     SSE events -> StreamEvent (unit-tested, no network)
   tools/
     index.ts             registry + safe executeTool()
     calculator.ts
@@ -120,6 +140,9 @@ src/
     parse-plan.ts        lenient JSON plan parser
 tests/                   vitest: tools, plan parsing, the loop, and eval graders
 eval/                    scenario runner for agent-behavior regression (fake LLM)
+tests/                   vitest: tools, plan parsing, loop, stream mapper (fake LLM)
+LEARNING.md              concepts → production mapping
+ARCHITECTURE.md          design decisions and failure modes
 ```
 
 ## How to add a new tool
@@ -149,13 +172,16 @@ export const myTool: ToolDefinition = {
 
 2. Register it in `src/tools/index.ts` by adding it to the `tools` array.
 
-That's it — the loop, the prompts, and the Anthropic tool schema pick it up automatically. Rules of thumb: never throw from `execute` (return `Error: ...` strings), and never use `eval`.
+That's it — the loop, the prompts, and the Anthropic tool schema pick it up automatically. Rules of thumb: never throw from `execute` (return `Error: ...` strings), never use `eval`, and treat every argument as untrusted model output.
+
+In production you would also: schema-validate at the **registry** (not only inside the tool), mark writes as needing human approval, and run anything that touches disk/network/shell in a sandbox. That mapping is in [LEARNING.md](LEARNING.md).
 
 ## Tests and checks
 
 ```bash
 pnpm test        # vitest (no API key needed — the loop is tested with a fake LLM)
 pnpm eval        # scenario runner against a fake LLM (also no API key)
+pnpm test        # vitest (no API key — FakeClient scripts the LLM)
 pnpm lint        # eslint
 pnpm typecheck   # tsc --noEmit
 pnpm format      # prettier
@@ -182,9 +208,10 @@ This is **not** an LLM-as-judge. Live-model eval (`EVAL_LIVE=1`) is intentionall
 2. Fill in `scriptedResponses` in the same order the agent will call the LLM (plan, then acting turns).
 3. Set `expect` checks. Keep them mechanical (substrings, tool names, flags).
 4. Run `pnpm eval`.
+What each test file is proving: [LEARNING.md](LEARNING.md) (tests as checkpoints).
 
 ## Assumptions
 
-- `web_search` is intentionally fake: deterministic, free, and safe for tests. Swapping in a real search API only means rewriting its `execute`.
+- `web_search` is intentionally fake: deterministic, free, and safe for tests. Swapping in a real search API only means rewriting its `execute` — plus allowlists, timeouts, and treating the snippet as **untrusted** text.
 - The plan is **advisory**: the acting loop sees it but may skip or reorder steps.
-- This is a learning demo, not production software — see the "not production-ready" section of [ARCHITECTURE.md](ARCHITECTURE.md).
+- This is a learning demo, not production software. [LEARNING.md](LEARNING.md) Part 2 is the production extension map; [ARCHITECTURE.md](ARCHITECTURE.md) lists what this branch does not do.
