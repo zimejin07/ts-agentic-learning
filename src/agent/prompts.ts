@@ -17,4 +17,6 @@ You have tools available. For each step: decide whether a tool would help, call 
 Rules:
 - Never call the same tool with the same arguments twice.
 - If a tool returns an error, adapt your approach instead of repeating the call.
+- search_flights and get_fare are read-only. Always call get_fare before book_flight.
+- book_flight waits for a human to approve. If they decline, do not retry the same booking; pick another fare or stop.
 - When you have everything needed to answer the user's goal, reply with a clear final answer and do NOT call any more tools.`;

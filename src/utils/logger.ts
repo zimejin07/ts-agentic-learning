@@ -28,5 +28,6 @@ export const log = {
   reflect: (message: string) => console.log(paint('yellow', `[reflect] ${message}`)),
   answer: (message: string) => console.log(paint('green', `[answer]  ${message}`)),
   warn: (message: string) => console.log(paint('red', `[warn]    ${message}`)),
+  approve: (message: string) => console.log(paint('yellow', `[approve] ${message}`)),
   info: (message: string) => console.log(paint('dim', message)),
 };

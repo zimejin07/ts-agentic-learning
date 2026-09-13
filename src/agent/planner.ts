@@ -1,11 +1,11 @@
-import type { ContentBlock, LlmClient, Plan } from '../types/index.js';
+import type { ContentBlock, LlmClient, LlmResponse, Plan } from '../types/index.js';
 import { parsePlan } from '../utils/parse-plan.js';
 import { PLANNING_SYSTEM_PROMPT } from './prompts.js';
 
 export interface PlanOutcome {
   plan: Plan;
-  /** True when the model's reply could not be parsed and we fell back. */
   usedFallback: boolean;
+  usage?: LlmResponse['usage'];
 }
 
 /**
@@ -33,8 +33,12 @@ export async function createPlan(
     .join('\n');
 
   const plan = parsePlan(text);
-  if (plan) return { plan, usedFallback: false };
-  return { plan: { steps: [{ id: 1, description: goal }] }, usedFallback: true };
+  if (plan) return { plan, usedFallback: false, usage: response.usage };
+  return {
+    plan: { steps: [{ id: 1, description: goal }] },
+    usedFallback: true,
+    usage: response.usage,
+  };
 }
 
 function isTextBlock(block: ContentBlock): block is Extract<ContentBlock, { type: 'text' }> {

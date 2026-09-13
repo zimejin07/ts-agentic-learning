@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import type { ToolDefinition } from '../types/index.js';
 
 /**
@@ -57,6 +58,7 @@ export const webSearchTool: ToolDefinition = {
     },
     required: ['query'],
   },
+  argsSchema: z.object({ query: z.string().min(1) }),
   execute: (input) => {
     const query = typeof input.query === 'string' ? input.query.toLowerCase().trim() : '';
     if (!query) return 'Error: "query" must be a non-empty string.';

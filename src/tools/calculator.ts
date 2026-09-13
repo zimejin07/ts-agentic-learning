@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import type { ToolDefinition } from '../types/index.js';
 
 /**
@@ -128,6 +129,7 @@ export const calculatorTool: ToolDefinition = {
     },
     required: ['expression'],
   },
+  argsSchema: z.object({ expression: z.string().min(1) }),
   execute: (input) => {
     const expression = input.expression;
     if (typeof expression !== 'string') {

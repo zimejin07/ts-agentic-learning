@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import type { ToolDefinition } from '../types/index.js';
 
 /**
@@ -18,6 +19,7 @@ export const currentTimeTool: ToolDefinition = {
     },
     required: [],
   },
+  argsSchema: z.object({ timezone: z.string().optional() }),
   execute: (input) => {
     const timezone =
       typeof input.timezone === 'string' && input.timezone.trim()

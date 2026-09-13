@@ -1,5 +1,6 @@
 import type {
   AgentResult,
+  ApprovalRequest,
   ChatMessage,
   ContentBlock,
   LlmClient,
@@ -10,6 +11,13 @@ import type {
   TraceEventType,
 } from '../types/index.js';
 import { executeTool } from '../tools/index.js';
+import {
+  getKeepLastTurns,
+  getRetryDelayMs,
+  getRetryAttempts,
+  getTokenBudget,
+} from '../utils/env.js';
+import { fingerprintCall, totalTokens, trimMessages, withRetry } from './loop-guards.js';
 import { createPlan } from './planner.js';
 import { AGENT_SYSTEM_PROMPT } from './prompts.js';
 
@@ -28,19 +36,39 @@ export interface RunAgentOptions {
   onToken?: (text: string) => void;
   /** Ctrl+C / cancel. Checked between iterations and forwarded to the LLM. */
   abortSignal?: AbortSignal;
+  /** Stop once cumulative input+output tokens reach this. Unset = no budget. */
+  tokenBudget?: number;
+  /** How many assistant/user pairs to keep. 0 = never trim. */
+  keepLastTurns?: number;
+  /** Extra LLM attempts after a 429/5xx. 0 = try once. */
+  retryAttempts?: number;
+  retryDelayMs?: number;
+  /**
+   * Human-in-the-loop for tools with `requiresApproval`. Missing means deny
+   * (safe default). Tests inject a scripted callback; the CLI asks y/n.
+   */
+  onApprove?: (request: ApprovalRequest) => Promise<boolean>;
 }
 
 /**
  * The core agent loop: PLAN -> (ACT -> OBSERVE -> REFLECT)* -> ANSWER.
  *
- * State lives in two places:
- *   - `messages`: the conversation history sent back to the model each round
- *     (this IS the agent's memory — there is no other store).
- *   - `trace`: a structured log of everything that happened, returned at the
- *     end so callers can inspect or print the full run.
+ * Loop engineering (see loop-guards.ts):
+ *   - retry 429/5xx
+ *   - token budget alongside the iteration cap
+ *   - refuse duplicate tool+args
+ *   - trim old turns so history cannot grow forever
+ *
+ * HITL: executeTool asks onApprove for requiresApproval tools *after* Zod and
+ * preflight. A decline is an observation; the fingerprint then blocks retries.
  */
 export async function runAgent(options: RunAgentOptions): Promise<AgentResult> {
-  const { goal, client, tools, maxIterations, onEvent, onToken, abortSignal } = options;
+  const { goal, client, tools, maxIterations, onEvent, onToken, abortSignal, onApprove } = options;
+  const tokenBudget = options.tokenBudget ?? getTokenBudget();
+  const keepLastTurns = options.keepLastTurns ?? getKeepLastTurns();
+  const retryAttempts = options.retryAttempts ?? getRetryAttempts();
+  const retryDelayMs = options.retryDelayMs ?? getRetryDelayMs();
+
   const trace: TraceEvent[] = [];
   const emit = (type: TraceEventType, iteration: number, message: string) => {
     const event: TraceEvent = { type, iteration, message };
@@ -50,51 +78,100 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentResult> {
 
   throwIfAborted(abortSignal);
 
+  const retry = { extraAttempts: retryAttempts, delayMs: retryDelayMs, abortSignal };
+  let tokensUsed = 0;
+  let lastModelText = '';
+  let iterations = 0;
+  const seenCalls = new Set<string>();
+
   // ---------- PLAN ----------
-  // Planning stays on complete(): we want a parseable JSON blob, not a live
-  // token show. Streaming is reserved for the acting loop below.
-  const { plan, usedFallback } = await createPlan(goal, client, abortSignal);
+  const {
+    plan,
+    usedFallback,
+    usage: planUsage,
+  } = await withRetry(() => createPlan(goal, client, abortSignal), retry);
+  tokensUsed += totalTokens(planUsage);
   if (usedFallback) {
     emit('warning', 0, 'Could not parse the model plan; falling back to a single-step plan.');
   }
   emit('plan', 0, plan.steps.map((step) => `${step.id}. ${step.description}`).join('\n'));
 
   const planText = plan.steps.map((step) => `${step.id}. ${step.description}`).join('\n');
-  const messages: ChatMessage[] = [
+  let messages: ChatMessage[] = [
     {
       role: 'user',
       content: `Goal: ${goal}\n\nPlan:\n${planText}\n\nWork through the plan. Use tools when they help.`,
     },
   ];
 
-  let lastModelText = '';
-  let iterations = 0;
+  const stopForBudget = (iteration: number): AgentResult => {
+    emit('warning', iteration, `Token budget (${tokenBudget}) reached after ${tokensUsed} tokens.`);
+    const answer = lastModelText
+      ? `${lastModelText}\n\n(Note: stopped after hitting the token budget, answer may be incomplete.)`
+      : `Stopped after hitting the token budget (${tokenBudget}).`;
+    emit('answer', iteration, answer);
+    return {
+      answer,
+      plan,
+      trace,
+      iterations,
+      hitMaxIterations: false,
+      hitTokenBudget: true,
+      tokensUsed,
+    };
+  };
+
+  if (tokenBudget !== undefined && tokensUsed >= tokenBudget) {
+    return stopForBudget(0);
+  }
 
   // ---------- ACT / OBSERVE / REFLECT loop ----------
   while (iterations < maxIterations) {
     throwIfAborted(abortSignal);
     iterations++;
 
-    const response = await completeTurn(
-      client,
-      {
-        system: AGENT_SYSTEM_PROMPT,
-        messages,
-        tools,
-        maxTokens: 1024,
-        abortSignal,
-      },
-      onToken,
+    const trimmed = trimMessages(messages, keepLastTurns);
+    if (trimmed.droppedPairs > 0) {
+      emit(
+        'warning',
+        iterations,
+        `Trimmed ${trimmed.droppedPairs} older turn(s) to keep the last ${keepLastTurns}.`,
+      );
+      messages = trimmed.messages;
+    }
+
+    const response = await withRetry(
+      () =>
+        completeTurn(
+          client,
+          {
+            system: AGENT_SYSTEM_PROMPT,
+            messages,
+            tools,
+            maxTokens: 1024,
+            abortSignal,
+          },
+          onToken,
+        ),
+      retry,
     );
+
+    tokensUsed += totalTokens(response.usage);
+    if (tokenBudget !== undefined && tokensUsed >= tokenBudget) {
+      const textBlocks = response.content.filter(isTextBlock);
+      const preview = textBlocks
+        .map((block) => block.text)
+        .join('\n')
+        .trim();
+      if (preview) lastModelText = preview;
+      return stopForBudget(iterations);
+    }
 
     const textBlocks = response.content.filter(isTextBlock);
     const toolUses = response.content.filter(isToolUseBlock);
 
-    // The assistant turn must be appended verbatim (including tool_use blocks)
-    // before we send tool results back — the API requires this pairing.
     messages.push({ role: 'assistant', content: response.content });
 
-    // No tool calls means the model considers itself done: its text IS the answer.
     if (toolUses.length === 0) {
       const answer =
         textBlocks
@@ -102,12 +179,17 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentResult> {
           .join('\n')
           .trim() || 'The agent finished without producing a final text answer.';
       emit('answer', iterations, answer);
-      return { answer, plan, trace, iterations, hitMaxIterations: false };
+      return {
+        answer,
+        plan,
+        trace,
+        iterations,
+        hitMaxIterations: false,
+        hitTokenBudget: false,
+        tokensUsed,
+      };
     }
 
-    // REFLECT: any text alongside tool calls is the model reasoning out loud
-    // about what it just saw or is about to do. We surface it, and remember it
-    // as the best answer-so-far in case we hit the iteration cap.
     for (const block of textBlocks) {
       if (block.text.trim()) {
         lastModelText = block.text.trim();
@@ -115,31 +197,57 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentResult> {
       }
     }
 
-    // ACT + OBSERVE: run each requested tool (sequentially, on purpose — see
-    // ARCHITECTURE.md) and append the results as the next user message.
     const toolResults: ContentBlock[] = [];
     for (const toolUse of toolUses) {
+      const fp = fingerprintCall(toolUse.name, toolUse.input);
       emit('act', iterations, `${toolUse.name}(${JSON.stringify(toolUse.input)})`);
-      const output = await executeTool(toolUse.name, toolUse.input);
+      let output: string;
+      if (seenCalls.has(fp)) {
+        output = `Error: already called "${toolUse.name}" with these arguments. Do not repeat; answer or try a different call.`;
+        emit('warning', iterations, `Blocked repeat call to ${toolUse.name}.`);
+      } else {
+        seenCalls.add(fp);
+        output = await executeTool(toolUse.name, toolUse.input, {
+          onApprove: async (request) => {
+            emit('approve', iterations, request.summary);
+            if (!onApprove) {
+              emit(
+                'warning',
+                iterations,
+                `No human approver configured; declined ${request.toolName}.`,
+              );
+              return false;
+            }
+            const approved = await onApprove(request);
+            if (!approved) {
+              emit('warning', iterations, `User declined ${request.toolName}.`);
+            }
+            return approved;
+          },
+        });
+      }
       emit('observe', iterations, truncate(output, 500));
       toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: output });
     }
     messages.push({ role: 'user', content: toolResults });
   }
 
-  // ---------- Max-iteration safety valve ----------
   emit('warning', iterations, `Max iteration cap (${maxIterations}) reached.`);
   const answer = lastModelText
     ? `${lastModelText}\n\n(Note: stopped after ${maxIterations} iterations, answer may be incomplete.)`
     : `Stopped after reaching the max iteration cap (${maxIterations}) without a final answer.`;
   emit('answer', iterations, answer);
-  return { answer, plan, trace, iterations, hitMaxIterations: true };
+  return {
+    answer,
+    plan,
+    trace,
+    iterations,
+    hitMaxIterations: true,
+    hitTokenBudget: false,
+    tokensUsed,
+  };
 }
 
-/**
- * Prefer `client.stream` when the provider implements it, otherwise `complete()`.
- * Tests that only implement complete() keep working unchanged.
- */
 async function completeTurn(
   client: LlmClient,
   request: LlmRequest,
@@ -174,7 +282,6 @@ function isToolUseBlock(block: ContentBlock): block is Extract<ContentBlock, { t
   return block.type === 'tool_use';
 }
 
-/** Keeps observations readable in the console; the full output still goes to the model. */
 function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }

@@ -1,6 +1,7 @@
 import { runAgent } from '../agent/loop.js';
 import { tools } from '../tools/index.js';
 import { log } from '../utils/logger.js';
+import { createStdinApprover } from './approve.js';
 import { attachAbort, loadCliConfig, parseGoal, printTraceEvent, printUsage } from './bootstrap.js';
 
 export async function runPlainCli(): Promise<void> {
@@ -10,11 +11,13 @@ export async function runPlainCli(): Promise<void> {
     process.exit(1);
   }
 
-  const { model, maxIterations, client } = loadCliConfig();
+  const { model, maxIterations, client, autoApprove } = loadCliConfig();
   const abort = attachAbort();
 
   log.info(`Goal: ${goal}`);
-  log.info(`Model: ${model} | Max iterations: ${maxIterations}\n`);
+  log.info(
+    `Model: ${model} | Max iterations: ${maxIterations}${autoApprove ? ' | auto-approve' : ''}\n`,
+  );
 
   try {
     const result = await runAgent({
@@ -25,12 +28,13 @@ export async function runPlainCli(): Promise<void> {
       abortSignal: abort.signal,
       onEvent: (event) => printTraceEvent(event, log),
       onToken: (text) => process.stdout.write(text),
+      onApprove: createStdinApprover({ autoApprove, abortSignal: abort.signal }),
     });
 
     console.log('\n\n--- Final answer ---');
     log.answer(result.answer);
 
-    if (result.hitMaxIterations) {
+    if (result.hitMaxIterations || result.hitTokenBudget) {
       process.exitCode = 2;
     }
   } catch (error: unknown) {

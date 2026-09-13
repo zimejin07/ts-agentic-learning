@@ -34,6 +34,10 @@ export class AnthropicLlmClient implements LlmClient {
     return {
       stopReason: response.stop_reason ?? 'end_turn',
       content: response.content.map(toContentBlock),
+      usage: {
+        inputTokens: response.usage.input_tokens,
+        outputTokens: response.usage.output_tokens,
+      },
     };
   }
 
@@ -50,28 +54,27 @@ export class AnthropicLlmClient implements LlmClient {
       request.abortSignal ? { signal: request.abortSignal } : undefined,
     );
 
-    let yieldedComplete = false;
     for await (const event of sdkStream) {
       throwIfAborted(request.abortSignal);
       const mapped = assembler.push(toRawStreamEvent(event));
       for (const item of mapped) {
-        if (item.type === 'message_complete') yieldedComplete = true;
+        if (item.type === 'message_complete') continue;
         yield item;
       }
     }
 
-    // If the SSE ended without a message_stop event, still emit a complete
-    // payload from the SDK's assembled final message.
-    if (!yieldedComplete) {
-      const final = await sdkStream.finalMessage();
-      yield {
-        type: 'message_complete',
-        response: {
-          stopReason: final.stop_reason ?? 'end_turn',
-          content: final.content.map(toContentBlock),
+    const final = await sdkStream.finalMessage();
+    yield {
+      type: 'message_complete',
+      response: {
+        stopReason: final.stop_reason ?? 'end_turn',
+        content: final.content.map(toContentBlock),
+        usage: {
+          inputTokens: final.usage.input_tokens,
+          outputTokens: final.usage.output_tokens,
         },
-      };
-    }
+      },
+    };
   }
 
   private toCreateParams(request: LlmRequest): Anthropic.MessageCreateParamsNonStreaming {
